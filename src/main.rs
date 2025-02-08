@@ -1,8 +1,10 @@
+#![feature(iter_order_by)]
+
 mod intern;
 mod schema;
 mod size;
 
-use intern::StringInterner;
+use schema::optimized::Interners;
 use size::EstimateSize;
 use std::fmt::Debug;
 use std::fs::{read_dir, DirEntry, File};
@@ -23,7 +25,7 @@ fn main() -> std::io::Result<()> {
         );
     }
 
-    let interner = StringInterner::default();
+    let interners = Interners::default();
 
     for directory in args.skip(1) {
         eprintln!("Visiting directory: {directory:?}");
@@ -44,7 +46,7 @@ fn main() -> std::io::Result<()> {
             };
             total_parsed_bytes += data.estimated_bytes();
 
-            let optimized = schema::optimized::Data::from(&interner, data.clone());
+            let optimized = schema::optimized::Data::from(&interners, data.clone());
             total_optimized_bytes += optimized.estimated_bytes();
 
             assert_eq!(
@@ -63,12 +65,17 @@ fn main() -> std::io::Result<()> {
         total_parsed_bytes as f64 * 100.0 / total_input_bytes as f64,
     );
 
-    total_optimized_bytes += interner.estimated_bytes();
+    let interners_bytes = interners.estimated_bytes();
+    total_optimized_bytes += interners_bytes;
     println!(
         "Optimized to {total_optimized_bytes} bytes (relative size = {:.02}%)",
         total_optimized_bytes as f64 * 100.0 / total_input_bytes as f64,
     );
-    interner.print_summary(total_optimized_bytes);
+    println!(
+        "[{:.02}%] Interners: {interners_bytes} bytes",
+        interners_bytes as f64 * 100.0 / total_optimized_bytes as f64,
+    );
+    interners.print_summary(total_optimized_bytes);
 
     Ok(())
 }
