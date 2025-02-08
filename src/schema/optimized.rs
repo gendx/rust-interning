@@ -6,10 +6,13 @@ use std::hash::Hash;
 #[derive(Default)]
 pub struct Interners {
     string: StringInterner,
+    string_set: Interner<InternedSet<String>>,
+    disruption_set: Interner<InternedSet<Disruption>>,
     disruption: Interner<Disruption>,
+    application_period: Interner<ApplicationPeriod>,
+    line_set: Interner<InternedSet<Line>>,
     line: Interner<Line>,
     line_header: Interner<LineHeader>,
-    application_period: Interner<ApplicationPeriod>,
     impacted_object: Interner<ImpactedObject>,
     object: Interner<Object>,
 }
@@ -17,10 +20,13 @@ pub struct Interners {
 impl EstimateSize for Interners {
     fn allocated_bytes(&self) -> usize {
         self.string.allocated_bytes()
+            + self.string_set.allocated_bytes()
+            + self.disruption_set.allocated_bytes()
             + self.disruption.allocated_bytes()
+            + self.application_period.allocated_bytes()
+            + self.line_set.allocated_bytes()
             + self.line.allocated_bytes()
             + self.line_header.allocated_bytes()
-            + self.application_period.allocated_bytes()
             + self.impacted_object.allocated_bytes()
             + self.object.allocated_bytes()
     }
@@ -29,15 +35,22 @@ impl EstimateSize for Interners {
 impl Interners {
     pub fn print_summary(&self, total_bytes: usize) {
         self.string.print_summary("", "String", total_bytes);
-        self.disruption.print_summary("", "Disruption", total_bytes);
+        self.string_set
+            .print_summary("", "InternedSet<String>", total_bytes);
+        self.disruption_set
+            .print_summary("", "InternedSet<Disruption>", total_bytes);
+        self.disruption
+            .print_summary("  ", "Disruption", total_bytes);
         self.application_period
-            .print_summary("  ", "ApplicationPeriod", total_bytes);
-        self.line.print_summary("", "Line", total_bytes);
+            .print_summary("    ", "ApplicationPeriod", total_bytes);
+        self.line_set
+            .print_summary("", "InternedSet<Line>", total_bytes);
+        self.line.print_summary("  ", "Line", total_bytes);
         self.line_header
-            .print_summary("  ", "LineHeader", total_bytes);
+            .print_summary("    ", "LineHeader", total_bytes);
         self.impacted_object
-            .print_summary("  ", "ImpactedObject", total_bytes);
-        self.object.print_summary("    ", "Object", total_bytes);
+            .print_summary("    ", "ImpactedObject", total_bytes);
+        self.object.print_summary("      ", "Object", total_bytes);
     }
 }
 
@@ -98,8 +111,8 @@ impl<T> InternedSet<T> {
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Data {
     Success {
-        disruptions: InternedSet<Disruption>,
-        lines: InternedSet<Line>,
+        disruptions: Interned<InternedSet<Disruption>>,
+        lines: Interned<InternedSet<Line>>,
         last_updated_date: IString,
     },
     Error {
@@ -141,11 +154,15 @@ impl EqWith<source::Data, Interners> for Data {
                 last_updated_date,
             } => {
                 other.disruptions.as_ref().is_some_and(|other| {
-                    disruptions.set_eq_by(other, |x, y| {
-                        x.eq_with_more(y, &interners.disruption, interners)
-                    })
+                    disruptions
+                        .lookup(&interners.disruption_set)
+                        .set_eq_by(other, |x, y| {
+                            x.eq_with_more(y, &interners.disruption, interners)
+                        })
                 }) && other.lines.as_ref().is_some_and(|other| {
-                    lines.set_eq_by(other, |x, y| x.eq_with_more(y, &interners.line, interners))
+                    lines
+                        .lookup(&interners.line_set)
+                        .set_eq_by(other, |x, y| x.eq_with_more(y, &interners.line, interners))
                 }) && other
                     .last_updated_date
                     .as_ref()
@@ -189,17 +206,21 @@ impl Data {
                 status_code: None,
                 error: None,
                 message: None,
-            } => Data::Success {
-                disruptions: InternedSet::new(disruptions.into_iter().map(|x| {
+            } => {
+                let disruptions = InternedSet::new(disruptions.into_iter().map(|x| {
                     let disruption = Disruption::from(interners, x);
                     Interned::from(&mut interners.disruption, disruption)
-                })),
-                lines: InternedSet::new(lines.into_iter().map(|x| {
+                }));
+                let lines = InternedSet::new(lines.into_iter().map(|x| {
                     let line = Line::from(interners, x);
                     Interned::from(&mut interners.line, line)
-                })),
-                last_updated_date: Interned::from(&mut interners.string, last_updated_date),
-            },
+                }));
+                Data::Success {
+                    disruptions: Interned::from(&mut interners.disruption_set, disruptions),
+                    lines: Interned::from(&mut interners.line_set, lines),
+                    last_updated_date: Interned::from(&mut interners.string, last_updated_date),
+                }
+            }
             source::Data {
                 disruptions: None,
                 lines: None,
@@ -405,7 +426,7 @@ impl EqWith<source::Line, Interners> for LineHeader {
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ImpactedObject {
     pub object: Interned<Object>,
-    pub disruption_ids: InternedSet<String>,
+    pub disruption_ids: Interned<InternedSet<String>>,
 }
 
 impl EstimateSize for ImpactedObject {
@@ -420,6 +441,7 @@ impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
             .eq_with_more(other, &interners.object, interners)
             && self
                 .disruption_ids
+                .lookup(&interners.string_set)
                 .set_eq_by(&other.disruption_ids, |x, y| {
                     x.eq_with(y, &interners.string)
                 })
@@ -428,6 +450,12 @@ impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
 
 impl ImpactedObject {
     pub fn from(interners: &mut Interners, source: source::ImpactedObject) -> Self {
+        let disruption_ids = InternedSet::new(
+            source
+                .disruption_ids
+                .into_iter()
+                .map(|x| Interned::from(&mut interners.string, x)),
+        );
         Self {
             object: Interned::from(
                 &mut interners.object,
@@ -437,12 +465,7 @@ impl ImpactedObject {
                     name: Interned::from(&mut interners.string, source.name),
                 },
             ),
-            disruption_ids: InternedSet::new(
-                source
-                    .disruption_ids
-                    .into_iter()
-                    .map(|x| Interned::from(&mut interners.string, x)),
-            ),
+            disruption_ids: Interned::from(&mut interners.string_set, disruption_ids),
         }
     }
 }
