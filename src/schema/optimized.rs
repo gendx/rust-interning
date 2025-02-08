@@ -8,8 +8,10 @@ pub struct Interners {
     string: StringInterner,
     disruption: Interner<Disruption>,
     line: Interner<Line>,
+    line_header: Interner<LineHeader>,
     application_period: Interner<ApplicationPeriod>,
     impacted_object: Interner<ImpactedObject>,
+    object: Interner<Object>,
 }
 
 impl EstimateSize for Interners {
@@ -17,8 +19,10 @@ impl EstimateSize for Interners {
         self.string.allocated_bytes()
             + self.disruption.allocated_bytes()
             + self.line.allocated_bytes()
+            + self.line_header.allocated_bytes()
             + self.application_period.allocated_bytes()
             + self.impacted_object.allocated_bytes()
+            + self.object.allocated_bytes()
     }
 }
 
@@ -29,8 +33,11 @@ impl Interners {
         self.application_period
             .print_summary("  ", "ApplicationPeriod", total_bytes);
         self.line.print_summary("", "Line", total_bytes);
+        self.line_header
+            .print_summary("  ", "LineHeader", total_bytes);
         self.impacted_object
             .print_summary("  ", "ImpactedObject", total_bytes);
+        self.object.print_summary("    ", "Object", total_bytes);
     }
 }
 
@@ -319,36 +326,20 @@ impl ApplicationPeriod {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Line {
-    pub id: IString,
-    pub name: IString,
-    pub short_name: IString,
-    pub mode: IString,
-    pub network_id: IString,
+    pub header: Interned<LineHeader>,
     pub impacted_objects: InternedSet<ImpactedObject>,
 }
 
 impl EstimateSize for Line {
     fn allocated_bytes(&self) -> usize {
-        self.id.allocated_bytes()
-            + self.name.allocated_bytes()
-            + self.short_name.allocated_bytes()
-            + self.mode.allocated_bytes()
-            + self.network_id.allocated_bytes()
-            + self.impacted_objects.allocated_bytes()
+        self.header.allocated_bytes() + self.impacted_objects.allocated_bytes()
     }
 }
 
 impl EqWith<source::Line, Interners> for Line {
     fn eq_with(&self, other: &source::Line, interners: &Interners) -> bool {
-        self.id.eq_with(&other.id, &interners.string)
-            && self.name.eq_with(&other.name, &interners.string)
-            && self
-                .short_name
-                .eq_with(&other.short_name, &interners.string)
-            && self.mode.eq_with(&other.mode, &interners.string)
-            && self
-                .network_id
-                .eq_with(&other.network_id, &interners.string)
+        self.header
+            .eq_with_more(other, &interners.line_header, interners)
             && self
                 .impacted_objects
                 .set_eq_by(&other.impacted_objects, |x, y| {
@@ -360,11 +351,16 @@ impl EqWith<source::Line, Interners> for Line {
 impl Line {
     pub fn from(interners: &mut Interners, source: source::Line) -> Self {
         Self {
-            id: Interned::from(&mut interners.string, source.id),
-            name: Interned::from(&mut interners.string, source.name),
-            short_name: Interned::from(&mut interners.string, source.short_name),
-            mode: Interned::from(&mut interners.string, source.mode),
-            network_id: Interned::from(&mut interners.string, source.network_id),
+            header: Interned::from(
+                &mut interners.line_header,
+                LineHeader {
+                    id: Interned::from(&mut interners.string, source.id),
+                    name: Interned::from(&mut interners.string, source.name),
+                    short_name: Interned::from(&mut interners.string, source.short_name),
+                    mode: Interned::from(&mut interners.string, source.mode),
+                    network_id: Interned::from(&mut interners.string, source.network_id),
+                },
+            ),
             impacted_objects: InternedSet::new(source.impacted_objects.into_iter().map(|x| {
                 let impacted_object = ImpactedObject::from(interners, x);
                 Interned::from(&mut interners.impacted_object, impacted_object)
@@ -374,27 +370,54 @@ impl Line {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct ImpactedObject {
-    pub typ: IString,
+pub struct LineHeader {
     pub id: IString,
     pub name: IString,
+    pub short_name: IString,
+    pub mode: IString,
+    pub network_id: IString,
+}
+
+impl EstimateSize for LineHeader {
+    fn allocated_bytes(&self) -> usize {
+        self.id.allocated_bytes()
+            + self.name.allocated_bytes()
+            + self.short_name.allocated_bytes()
+            + self.mode.allocated_bytes()
+            + self.network_id.allocated_bytes()
+    }
+}
+
+impl EqWith<source::Line, Interners> for LineHeader {
+    fn eq_with(&self, other: &source::Line, interners: &Interners) -> bool {
+        self.id.eq_with(&other.id, &interners.string)
+            && self.name.eq_with(&other.name, &interners.string)
+            && self
+                .short_name
+                .eq_with(&other.short_name, &interners.string)
+            && self.mode.eq_with(&other.mode, &interners.string)
+            && self
+                .network_id
+                .eq_with(&other.network_id, &interners.string)
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct ImpactedObject {
+    pub object: Interned<Object>,
     pub disruption_ids: InternedSet<String>,
 }
 
 impl EstimateSize for ImpactedObject {
     fn allocated_bytes(&self) -> usize {
-        self.typ.allocated_bytes()
-            + self.id.allocated_bytes()
-            + self.name.allocated_bytes()
-            + self.disruption_ids.allocated_bytes()
+        self.object.allocated_bytes() + self.disruption_ids.allocated_bytes()
     }
 }
 
 impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
     fn eq_with(&self, other: &source::ImpactedObject, interners: &Interners) -> bool {
-        self.typ.eq_with(&other.typ, &interners.string)
-            && self.id.eq_with(&other.id, &interners.string)
-            && self.name.eq_with(&other.name, &interners.string)
+        self.object
+            .eq_with_more(other, &interners.object, interners)
             && self
                 .disruption_ids
                 .set_eq_by(&other.disruption_ids, |x, y| {
@@ -406,9 +429,14 @@ impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
 impl ImpactedObject {
     pub fn from(interners: &mut Interners, source: source::ImpactedObject) -> Self {
         Self {
-            typ: Interned::from(&mut interners.string, source.typ),
-            id: Interned::from(&mut interners.string, source.id),
-            name: Interned::from(&mut interners.string, source.name),
+            object: Interned::from(
+                &mut interners.object,
+                Object {
+                    typ: Interned::from(&mut interners.string, source.typ),
+                    id: Interned::from(&mut interners.string, source.id),
+                    name: Interned::from(&mut interners.string, source.name),
+                },
+            ),
             disruption_ids: InternedSet::new(
                 source
                     .disruption_ids
@@ -416,5 +444,26 @@ impl ImpactedObject {
                     .map(|x| Interned::from(&mut interners.string, x)),
             ),
         }
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct Object {
+    pub typ: IString,
+    pub id: IString,
+    pub name: IString,
+}
+
+impl EstimateSize for Object {
+    fn allocated_bytes(&self) -> usize {
+        self.typ.allocated_bytes() + self.id.allocated_bytes() + self.name.allocated_bytes()
+    }
+}
+
+impl EqWith<source::ImpactedObject, Interners> for Object {
+    fn eq_with(&self, other: &source::ImpactedObject, interners: &Interners) -> bool {
+        self.typ.eq_with(&other.typ, &interners.string)
+            && self.id.eq_with(&other.id, &interners.string)
+            && self.name.eq_with(&other.name, &interners.string)
     }
 }
