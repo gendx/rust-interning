@@ -1,19 +1,18 @@
 use super::source;
-use crate::intern::{IString, Interned, Interner, StringInterner};
+use crate::intern::{EqWith, IString, Interned, Interner, StringInterner};
 use crate::size::EstimateSize;
 use std::hash::Hash;
-use std::ops::Deref;
 
 #[derive(Default)]
-pub struct Interners<'a> {
+pub struct Interners {
     string: StringInterner,
-    disruption: Interner<Disruption<'a>>,
-    line: Interner<Line<'a>>,
-    application_period: Interner<ApplicationPeriod<'a>>,
-    impacted_object: Interner<ImpactedObject<'a>>,
+    disruption: Interner<Disruption>,
+    line: Interner<Line>,
+    application_period: Interner<ApplicationPeriod>,
+    impacted_object: Interner<ImpactedObject>,
 }
 
-impl EstimateSize for Interners<'_> {
+impl EstimateSize for Interners {
     fn allocated_bytes(&self) -> usize {
         self.string.allocated_bytes()
             + self.disruption.allocated_bytes()
@@ -23,7 +22,7 @@ impl EstimateSize for Interners<'_> {
     }
 }
 
-impl Interners<'_> {
+impl Interners {
     pub fn print_summary(&self, total_bytes: usize) {
         self.string.print_summary("", "String", total_bytes);
         self.disruption.print_summary("", "Disruption", total_bytes);
@@ -35,55 +34,29 @@ impl Interners<'_> {
     }
 }
 
-// Somehow `Option<T>` doesn't implement `PartialEq<Option<U>>` where
-// `T: PartialEq<U>` so we implement it by hand.
-fn option_eq<T, U>(lhs: &Option<T>, rhs: &Option<U>) -> bool
-where
-    T: PartialEq<U>,
-{
+fn option_eq_by<T, U>(lhs: &Option<T>, rhs: &Option<U>, pred: impl Fn(&T, &U) -> bool) -> bool {
     match (lhs, rhs) {
         (None, None) => true,
         (None, Some(_)) | (Some(_), None) => false,
-        (Some(x), Some(y)) => x == y,
+        (Some(x), Some(y)) => pred(x, y),
     }
 }
 
-fn mixed_eq<T, U>(lhs: &Interned<'_, T>, rhs: &U) -> bool
-where
-    T: Eq + Hash + PartialEq<U>,
-{
-    lhs.lookup().deref() == rhs
-}
-
-fn slice_mixed_eq<T, U>(lhs: &[Interned<'_, T>], rhs: &[U]) -> bool
-where
-    T: Eq + Hash + PartialEq<U>,
-{
-    lhs.iter().eq_by(rhs.iter(), |t, u| mixed_eq(t, u))
-}
-
-fn option_vec_mixed_eq<T, U>(lhs: &Option<Vec<Interned<'_, T>>>, rhs: &Option<Vec<U>>) -> bool
-where
-    T: Eq + Hash + PartialEq<U>,
-{
-    match (lhs, rhs) {
-        (None, None) => true,
-        (None, Some(_)) | (Some(_), None) => false,
-        (Some(x), Some(y)) => slice_mixed_eq(x, y),
-    }
+fn slice_eq_by<T, U>(lhs: &[T], rhs: &[U], pred: impl Fn(&T, &U) -> bool) -> bool {
+    lhs.iter().eq_by(rhs.iter(), pred)
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Data<'a> {
+pub struct Data {
     pub status_code: Option<i32>,
-    pub error: Option<IString<'a>>,
-    pub message: Option<IString<'a>>,
-    pub disruptions: Option<Vec<Interned<'a, Disruption<'a>>>>,
-    pub lines: Option<Vec<Interned<'a, Line<'a>>>>,
-    pub last_updated_date: Option<IString<'a>>,
+    pub error: Option<IString>,
+    pub message: Option<IString>,
+    pub disruptions: Option<Vec<Interned<Disruption>>>,
+    pub lines: Option<Vec<Interned<Line>>>,
+    pub last_updated_date: Option<IString>,
 }
 
-impl EstimateSize for Data<'_> {
+impl EstimateSize for Data {
     fn allocated_bytes(&self) -> usize {
         self.status_code.allocated_bytes()
             + self.error.allocated_bytes()
@@ -94,54 +67,76 @@ impl EstimateSize for Data<'_> {
     }
 }
 
-impl PartialEq<source::Data> for Data<'_> {
-    fn eq(&self, other: &source::Data) -> bool {
+impl EqWith<source::Data, Interners> for Data {
+    fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
         self.status_code == other.status_code
-            && option_eq(&self.error, &other.error)
-            && option_eq(&self.message, &other.message)
-            && option_vec_mixed_eq(&self.disruptions, &other.disruptions)
-            && option_vec_mixed_eq(&self.lines, &other.lines)
-            && option_eq(&self.last_updated_date, &other.last_updated_date)
+            && option_eq_by(&self.error, &other.error, |x, y| {
+                x.eq_with(y, &interners.string)
+            })
+            && option_eq_by(&self.message, &other.message, |x, y| {
+                x.eq_with(y, &interners.string)
+            })
+            && option_eq_by(&self.disruptions, &other.disruptions, |x, y| {
+                slice_eq_by(x, y, |x, y| {
+                    x.eq_with_more(y, &interners.disruption, interners)
+                })
+            })
+            && option_eq_by(&self.lines, &other.lines, |x, y| {
+                slice_eq_by(x, y, |x, y| x.eq_with_more(y, &interners.line, interners))
+            })
+            && option_eq_by(&self.last_updated_date, &other.last_updated_date, |x, y| {
+                x.eq_with(y, &interners.string)
+            })
     }
 }
 
-impl<'a> Data<'a> {
-    pub fn from(interners: &'a Interners<'a>, source: source::Data) -> Self {
+impl Data {
+    pub fn from(interners: &mut Interners, source: source::Data) -> Self {
         Self {
             status_code: source.status_code,
-            error: source.error.map(|x| Interned::from(&interners.string, x)),
-            message: source.message.map(|x| Interned::from(&interners.string, x)),
+            error: source
+                .error
+                .map(|x| Interned::from(&mut interners.string, x)),
+            message: source
+                .message
+                .map(|x| Interned::from(&mut interners.string, x)),
             disruptions: source.disruptions.map(|x| {
                 x.into_iter()
-                    .map(|x| Interned::from(&interners.disruption, Disruption::from(interners, x)))
+                    .map(|x| {
+                        let disruption = Disruption::from(interners, x);
+                        Interned::from(&mut interners.disruption, disruption)
+                    })
                     .collect()
             }),
             lines: source.lines.map(|x| {
                 x.into_iter()
-                    .map(|x| Interned::from(&interners.line, Line::from(interners, x)))
+                    .map(|x| {
+                        let line = Line::from(interners, x);
+                        Interned::from(&mut interners.line, line)
+                    })
                     .collect()
             }),
             last_updated_date: source
                 .last_updated_date
-                .map(|x| Interned::from(&interners.string, x)),
+                .map(|x| Interned::from(&mut interners.string, x)),
         }
     }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Disruption<'a> {
-    pub id: IString<'a>,
-    pub application_periods: Vec<Interned<'a, ApplicationPeriod<'a>>>,
-    pub last_update: IString<'a>,
-    pub cause: IString<'a>,
-    pub severity: IString<'a>,
-    pub tags: Option<Vec<IString<'a>>>,
-    pub title: IString<'a>,
-    pub message: IString<'a>,
-    pub disruption_id: Option<IString<'a>>,
+pub struct Disruption {
+    pub id: IString,
+    pub application_periods: Vec<Interned<ApplicationPeriod>>,
+    pub last_update: IString,
+    pub cause: IString,
+    pub severity: IString,
+    pub tags: Option<Vec<IString>>,
+    pub title: IString,
+    pub message: IString,
+    pub disruption_id: Option<IString>,
 }
 
-impl EstimateSize for Disruption<'_> {
+impl EstimateSize for Disruption {
     fn allocated_bytes(&self) -> usize {
         self.id.allocated_bytes()
             + self.application_periods.allocated_bytes()
@@ -155,89 +150,98 @@ impl EstimateSize for Disruption<'_> {
     }
 }
 
-impl PartialEq<source::Disruption> for Disruption<'_> {
-    fn eq(&self, other: &source::Disruption) -> bool {
-        self.id == other.id
-            && slice_mixed_eq(&self.application_periods, &other.application_periods)
-            && self.last_update == other.last_update
-            && self.cause == other.cause
-            && self.severity == other.severity
-            && option_eq(&self.tags, &other.tags)
-            && self.title == other.title
-            && self.message == other.message
-            && option_eq(&self.disruption_id, &other.disruption_id)
+impl EqWith<source::Disruption, Interners> for Disruption {
+    fn eq_with(&self, other: &source::Disruption, interners: &Interners) -> bool {
+        self.id.eq_with(&other.id, &interners.string)
+            && slice_eq_by(
+                &self.application_periods,
+                &other.application_periods,
+                |x, y| x.eq_with_more(y, &interners.application_period, interners),
+            )
+            && self
+                .last_update
+                .eq_with(&other.last_update, &interners.string)
+            && self.cause.eq_with(&other.cause, &interners.string)
+            && self.severity.eq_with(&other.severity, &interners.string)
+            && option_eq_by(&self.tags, &other.tags, |x, y| {
+                slice_eq_by(x, y, |x, y| x.eq_with(y, &interners.string))
+            })
+            && self.title.eq_with(&other.title, &interners.string)
+            && self.message.eq_with(&other.message, &interners.string)
+            && option_eq_by(&self.disruption_id, &other.disruption_id, |x, y| {
+                x.eq_with(y, &interners.string)
+            })
     }
 }
 
-impl<'a> Disruption<'a> {
-    pub fn from(interners: &'a Interners<'a>, source: source::Disruption) -> Self {
+impl Disruption {
+    pub fn from(interners: &mut Interners, source: source::Disruption) -> Self {
         Self {
-            id: Interned::from(&interners.string, source.id),
+            id: Interned::from(&mut interners.string, source.id),
             application_periods: source
                 .application_periods
                 .into_iter()
                 .map(|x| {
-                    Interned::from(
-                        &interners.application_period,
-                        ApplicationPeriod::from(interners, x),
-                    )
+                    let application_period = ApplicationPeriod::from(interners, x);
+                    Interned::from(&mut interners.application_period, application_period)
                 })
                 .collect(),
-            last_update: Interned::from(&interners.string, source.last_update),
-            cause: Interned::from(&interners.string, source.cause),
-            severity: Interned::from(&interners.string, source.severity),
+            last_update: Interned::from(&mut interners.string, source.last_update),
+            cause: Interned::from(&mut interners.string, source.cause),
+            severity: Interned::from(&mut interners.string, source.severity),
             tags: source.tags.map(|x| {
                 x.into_iter()
-                    .map(|x| Interned::from(&interners.string, x))
+                    .map(|x| Interned::from(&mut interners.string, x))
                     .collect()
             }),
-            title: Interned::from(&interners.string, source.title),
-            message: Interned::from(&interners.string, source.message),
+            title: Interned::from(&mut interners.string, source.title),
+            message: Interned::from(&mut interners.string, source.message),
             disruption_id: source
                 .disruption_id
-                .map(|x| Interned::from(&interners.string, x)),
+                .map(|x| Interned::from(&mut interners.string, x)),
         }
     }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct ApplicationPeriod<'a> {
-    pub begin: IString<'a>,
-    pub end: IString<'a>,
+pub struct ApplicationPeriod {
+    pub begin: IString,
+    pub end: IString,
 }
 
-impl EstimateSize for ApplicationPeriod<'_> {
+impl EstimateSize for ApplicationPeriod {
     fn allocated_bytes(&self) -> usize {
         self.begin.allocated_bytes() + self.end.allocated_bytes()
     }
 }
 
-impl PartialEq<source::ApplicationPeriod> for ApplicationPeriod<'_> {
-    fn eq(&self, other: &source::ApplicationPeriod) -> bool {
-        self.begin == other.begin && self.end == other.end
+impl EqWith<source::ApplicationPeriod, Interners> for ApplicationPeriod {
+    fn eq_with(&self, other: &source::ApplicationPeriod, interners: &Interners) -> bool {
+        self.begin.eq_with(&other.begin, &interners.string)
+            && self.end.eq_with(&other.end, &interners.string)
     }
 }
 
-impl<'a> ApplicationPeriod<'a> {
-    pub fn from(interners: &'a Interners<'a>, source: source::ApplicationPeriod) -> Self {
+impl ApplicationPeriod {
+    pub fn from(interners: &mut Interners, source: source::ApplicationPeriod) -> Self {
         Self {
-            begin: Interned::from(&interners.string, source.begin),
-            end: Interned::from(&interners.string, source.end),
+            begin: Interned::from(&mut interners.string, source.begin),
+            end: Interned::from(&mut interners.string, source.end),
         }
     }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Line<'a> {
-    pub id: IString<'a>,
-    pub name: IString<'a>,
-    pub short_name: IString<'a>,
-    pub mode: IString<'a>,
-    pub network_id: IString<'a>,
-    pub impacted_objects: Vec<Interned<'a, ImpactedObject<'a>>>,
+pub struct Line {
+    pub id: IString,
+    pub name: IString,
+    pub short_name: IString,
+    pub mode: IString,
+    pub network_id: IString,
+    pub impacted_objects: Vec<Interned<ImpactedObject>>,
 }
 
-impl EstimateSize for Line<'_> {
+impl EstimateSize for Line {
     fn allocated_bytes(&self) -> usize {
         self.id.allocated_bytes()
             + self.name.allocated_bytes()
@@ -248,33 +252,37 @@ impl EstimateSize for Line<'_> {
     }
 }
 
-impl PartialEq<source::Line> for Line<'_> {
-    fn eq(&self, other: &source::Line) -> bool {
-        self.id == other.id
-            && self.name == other.name
-            && self.short_name == other.short_name
-            && self.mode == other.mode
-            && self.network_id == other.network_id
-            && slice_mixed_eq(&self.impacted_objects, &other.impacted_objects)
+impl EqWith<source::Line, Interners> for Line {
+    fn eq_with(&self, other: &source::Line, interners: &Interners) -> bool {
+        self.id.eq_with(&other.id, &interners.string)
+            && self.name.eq_with(&other.name, &interners.string)
+            && self
+                .short_name
+                .eq_with(&other.short_name, &interners.string)
+            && self.mode.eq_with(&other.mode, &interners.string)
+            && self
+                .network_id
+                .eq_with(&other.network_id, &interners.string)
+            && slice_eq_by(&self.impacted_objects, &other.impacted_objects, |x, y| {
+                x.eq_with_more(y, &interners.impacted_object, interners)
+            })
     }
 }
 
-impl<'a> Line<'a> {
-    pub fn from(interners: &'a Interners<'a>, source: source::Line) -> Self {
+impl Line {
+    pub fn from(interners: &mut Interners, source: source::Line) -> Self {
         Self {
-            id: Interned::from(&interners.string, source.id),
-            name: Interned::from(&interners.string, source.name),
-            short_name: Interned::from(&interners.string, source.short_name),
-            mode: Interned::from(&interners.string, source.mode),
-            network_id: Interned::from(&interners.string, source.network_id),
+            id: Interned::from(&mut interners.string, source.id),
+            name: Interned::from(&mut interners.string, source.name),
+            short_name: Interned::from(&mut interners.string, source.short_name),
+            mode: Interned::from(&mut interners.string, source.mode),
+            network_id: Interned::from(&mut interners.string, source.network_id),
             impacted_objects: source
                 .impacted_objects
                 .into_iter()
                 .map(|x| {
-                    Interned::from(
-                        &interners.impacted_object,
-                        ImpactedObject::from(interners, x),
-                    )
+                    let impacted_object = ImpactedObject::from(interners, x);
+                    Interned::from(&mut interners.impacted_object, impacted_object)
                 })
                 .collect(),
         }
@@ -282,14 +290,14 @@ impl<'a> Line<'a> {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct ImpactedObject<'a> {
-    pub typ: IString<'a>,
-    pub id: IString<'a>,
-    pub name: IString<'a>,
-    pub disruption_ids: Vec<IString<'a>>,
+pub struct ImpactedObject {
+    pub typ: IString,
+    pub id: IString,
+    pub name: IString,
+    pub disruption_ids: Vec<IString>,
 }
 
-impl EstimateSize for ImpactedObject<'_> {
+impl EstimateSize for ImpactedObject {
     fn allocated_bytes(&self) -> usize {
         self.typ.allocated_bytes()
             + self.id.allocated_bytes()
@@ -298,25 +306,27 @@ impl EstimateSize for ImpactedObject<'_> {
     }
 }
 
-impl PartialEq<source::ImpactedObject> for ImpactedObject<'_> {
-    fn eq(&self, other: &source::ImpactedObject) -> bool {
-        self.typ == other.typ
-            && self.id == other.id
-            && self.name == other.name
-            && self.disruption_ids == other.disruption_ids
+impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
+    fn eq_with(&self, other: &source::ImpactedObject, interners: &Interners) -> bool {
+        self.typ.eq_with(&other.typ, &interners.string)
+            && self.id.eq_with(&other.id, &interners.string)
+            && self.name.eq_with(&other.name, &interners.string)
+            && slice_eq_by(&self.disruption_ids, &other.disruption_ids, |x, y| {
+                x.eq_with(y, &interners.string)
+            })
     }
 }
 
-impl<'a> ImpactedObject<'a> {
-    pub fn from(interners: &'a Interners<'a>, source: source::ImpactedObject) -> Self {
+impl ImpactedObject {
+    pub fn from(interners: &mut Interners, source: source::ImpactedObject) -> Self {
         Self {
-            typ: Interned::from(&interners.string, source.typ),
-            id: Interned::from(&interners.string, source.id),
-            name: Interned::from(&interners.string, source.name),
+            typ: Interned::from(&mut interners.string, source.typ),
+            id: Interned::from(&mut interners.string, source.id),
+            name: Interned::from(&mut interners.string, source.name),
             disruption_ids: source
                 .disruption_ids
                 .into_iter()
-                .map(|x| Interned::from(&interners.string, x))
+                .map(|x| Interned::from(&mut interners.string, x))
                 .collect(),
         }
     }

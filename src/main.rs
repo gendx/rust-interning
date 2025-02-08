@@ -4,6 +4,7 @@ mod intern;
 mod schema;
 mod size;
 
+use intern::EqWith;
 use schema::optimized::Interners;
 use size::EstimateSize;
 use std::fmt::Debug;
@@ -25,7 +26,7 @@ fn main() -> std::io::Result<()> {
         );
     }
 
-    let interners = Interners::default();
+    let mut interners = Interners::default();
 
     for directory in args.skip(1) {
         eprintln!("Visiting directory: {directory:?}");
@@ -46,11 +47,11 @@ fn main() -> std::io::Result<()> {
             };
             total_parsed_bytes += data.estimated_bytes();
 
-            let optimized = schema::optimized::Data::from(&interners, data.clone());
+            let optimized = schema::optimized::Data::from(&mut interners, data.clone());
             total_optimized_bytes += optimized.estimated_bytes();
 
-            assert_eq!(
-                optimized, data,
+            assert!(
+                optimized.eq_with(&data, &interners),
                 "Optimized data didn't match original for file: {file_path:?}"
             );
 
