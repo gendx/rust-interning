@@ -31,3 +31,9 @@ impl<T: EstimateSize> EstimateSize for Vec<T> {
         self.iter().map(|x| x.estimated_bytes()).sum()
     }
 }
+
+impl<T: EstimateSize> EstimateSize for Box<[T]> {
+    fn allocated_bytes(&self) -> usize {
+        self.iter().map(|x| x.estimated_bytes()).sum()
+    }
+}

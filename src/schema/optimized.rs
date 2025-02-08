@@ -42,8 +42,50 @@ fn option_eq_by<T, U>(lhs: &Option<T>, rhs: &Option<U>, pred: impl Fn(&T, &U) ->
     }
 }
 
-fn slice_eq_by<T, U>(lhs: &[T], rhs: &[U], pred: impl Fn(&T, &U) -> bool) -> bool {
-    lhs.iter().eq_by(rhs.iter(), pred)
+fn set_eq_by<T, U>(lhs: &[T], rhs: &[U], pred: impl Fn(&T, &U) -> bool) -> bool {
+    let len = lhs.len();
+    if len != rhs.len() {
+        return false;
+    }
+
+    let mut used = vec![false; len];
+    'outer: for x in lhs.iter() {
+        for (i, y) in rhs.iter().enumerate() {
+            if used[i] {
+                continue;
+            }
+            if pred(x, y) {
+                used[i] = true;
+                continue 'outer;
+            }
+        }
+        return false;
+    }
+
+    true
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct InternedSet<T> {
+    set: Box<[Interned<T>]>,
+}
+
+impl<T> EstimateSize for InternedSet<T> {
+    fn allocated_bytes(&self) -> usize {
+        self.set.allocated_bytes()
+    }
+}
+
+impl<T> InternedSet<T> {
+    fn new(set: impl IntoIterator<Item = Interned<T>>) -> Self {
+        let mut set: Box<[_]> = set.into_iter().collect();
+        set.sort_unstable();
+        Self { set }
+    }
+
+    fn set_eq_by<U>(&self, rhs: &[U], pred: impl Fn(&Interned<T>, &U) -> bool) -> bool {
+        set_eq_by(&self.set, rhs, pred)
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -51,8 +93,8 @@ pub struct Data {
     pub status_code: Option<i32>,
     pub error: Option<IString>,
     pub message: Option<IString>,
-    pub disruptions: Option<Vec<Interned<Disruption>>>,
-    pub lines: Option<Vec<Interned<Line>>>,
+    pub disruptions: Option<InternedSet<Disruption>>,
+    pub lines: Option<InternedSet<Line>>,
     pub last_updated_date: Option<IString>,
 }
 
@@ -77,12 +119,12 @@ impl EqWith<source::Data, Interners> for Data {
                 x.eq_with(y, &interners.string)
             })
             && option_eq_by(&self.disruptions, &other.disruptions, |x, y| {
-                slice_eq_by(x, y, |x, y| {
+                x.set_eq_by(y, |x, y| {
                     x.eq_with_more(y, &interners.disruption, interners)
                 })
             })
             && option_eq_by(&self.lines, &other.lines, |x, y| {
-                slice_eq_by(x, y, |x, y| x.eq_with_more(y, &interners.line, interners))
+                x.set_eq_by(y, |x, y| x.eq_with_more(y, &interners.line, interners))
             })
             && option_eq_by(&self.last_updated_date, &other.last_updated_date, |x, y| {
                 x.eq_with(y, &interners.string)
@@ -101,20 +143,16 @@ impl Data {
                 .message
                 .map(|x| Interned::from(&mut interners.string, x)),
             disruptions: source.disruptions.map(|x| {
-                x.into_iter()
-                    .map(|x| {
-                        let disruption = Disruption::from(interners, x);
-                        Interned::from(&mut interners.disruption, disruption)
-                    })
-                    .collect()
+                InternedSet::new(x.into_iter().map(|x| {
+                    let disruption = Disruption::from(interners, x);
+                    Interned::from(&mut interners.disruption, disruption)
+                }))
             }),
             lines: source.lines.map(|x| {
-                x.into_iter()
-                    .map(|x| {
-                        let line = Line::from(interners, x);
-                        Interned::from(&mut interners.line, line)
-                    })
-                    .collect()
+                InternedSet::new(x.into_iter().map(|x| {
+                    let line = Line::from(interners, x);
+                    Interned::from(&mut interners.line, line)
+                }))
             }),
             last_updated_date: source
                 .last_updated_date
@@ -126,11 +164,11 @@ impl Data {
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Disruption {
     pub id: IString,
-    pub application_periods: Vec<Interned<ApplicationPeriod>>,
+    pub application_periods: InternedSet<ApplicationPeriod>,
     pub last_update: IString,
     pub cause: IString,
     pub severity: IString,
-    pub tags: Option<Vec<IString>>,
+    pub tags: Option<InternedSet<String>>,
     pub title: IString,
     pub message: IString,
     pub disruption_id: Option<IString>,
@@ -153,18 +191,18 @@ impl EstimateSize for Disruption {
 impl EqWith<source::Disruption, Interners> for Disruption {
     fn eq_with(&self, other: &source::Disruption, interners: &Interners) -> bool {
         self.id.eq_with(&other.id, &interners.string)
-            && slice_eq_by(
-                &self.application_periods,
-                &other.application_periods,
-                |x, y| x.eq_with_more(y, &interners.application_period, interners),
-            )
+            && self
+                .application_periods
+                .set_eq_by(&other.application_periods, |x, y| {
+                    x.eq_with_more(y, &interners.application_period, interners)
+                })
             && self
                 .last_update
                 .eq_with(&other.last_update, &interners.string)
             && self.cause.eq_with(&other.cause, &interners.string)
             && self.severity.eq_with(&other.severity, &interners.string)
             && option_eq_by(&self.tags, &other.tags, |x, y| {
-                slice_eq_by(x, y, |x, y| x.eq_with(y, &interners.string))
+                x.set_eq_by(y, |x, y| x.eq_with(y, &interners.string))
             })
             && self.title.eq_with(&other.title, &interners.string)
             && self.message.eq_with(&other.message, &interners.string)
@@ -178,21 +216,20 @@ impl Disruption {
     pub fn from(interners: &mut Interners, source: source::Disruption) -> Self {
         Self {
             id: Interned::from(&mut interners.string, source.id),
-            application_periods: source
-                .application_periods
-                .into_iter()
-                .map(|x| {
+            application_periods: InternedSet::new(source.application_periods.into_iter().map(
+                |x| {
                     let application_period = ApplicationPeriod::from(interners, x);
                     Interned::from(&mut interners.application_period, application_period)
-                })
-                .collect(),
+                },
+            )),
             last_update: Interned::from(&mut interners.string, source.last_update),
             cause: Interned::from(&mut interners.string, source.cause),
             severity: Interned::from(&mut interners.string, source.severity),
             tags: source.tags.map(|x| {
-                x.into_iter()
-                    .map(|x| Interned::from(&mut interners.string, x))
-                    .collect()
+                InternedSet::new(
+                    x.into_iter()
+                        .map(|x| Interned::from(&mut interners.string, x)),
+                )
             }),
             title: Interned::from(&mut interners.string, source.title),
             message: Interned::from(&mut interners.string, source.message),
@@ -238,7 +275,7 @@ pub struct Line {
     pub short_name: IString,
     pub mode: IString,
     pub network_id: IString,
-    pub impacted_objects: Vec<Interned<ImpactedObject>>,
+    pub impacted_objects: InternedSet<ImpactedObject>,
 }
 
 impl EstimateSize for Line {
@@ -263,9 +300,11 @@ impl EqWith<source::Line, Interners> for Line {
             && self
                 .network_id
                 .eq_with(&other.network_id, &interners.string)
-            && slice_eq_by(&self.impacted_objects, &other.impacted_objects, |x, y| {
-                x.eq_with_more(y, &interners.impacted_object, interners)
-            })
+            && self
+                .impacted_objects
+                .set_eq_by(&other.impacted_objects, |x, y| {
+                    x.eq_with_more(y, &interners.impacted_object, interners)
+                })
     }
 }
 
@@ -277,14 +316,10 @@ impl Line {
             short_name: Interned::from(&mut interners.string, source.short_name),
             mode: Interned::from(&mut interners.string, source.mode),
             network_id: Interned::from(&mut interners.string, source.network_id),
-            impacted_objects: source
-                .impacted_objects
-                .into_iter()
-                .map(|x| {
-                    let impacted_object = ImpactedObject::from(interners, x);
-                    Interned::from(&mut interners.impacted_object, impacted_object)
-                })
-                .collect(),
+            impacted_objects: InternedSet::new(source.impacted_objects.into_iter().map(|x| {
+                let impacted_object = ImpactedObject::from(interners, x);
+                Interned::from(&mut interners.impacted_object, impacted_object)
+            })),
         }
     }
 }
@@ -294,7 +329,7 @@ pub struct ImpactedObject {
     pub typ: IString,
     pub id: IString,
     pub name: IString,
-    pub disruption_ids: Vec<IString>,
+    pub disruption_ids: InternedSet<String>,
 }
 
 impl EstimateSize for ImpactedObject {
@@ -311,9 +346,11 @@ impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
         self.typ.eq_with(&other.typ, &interners.string)
             && self.id.eq_with(&other.id, &interners.string)
             && self.name.eq_with(&other.name, &interners.string)
-            && slice_eq_by(&self.disruption_ids, &other.disruption_ids, |x, y| {
-                x.eq_with(y, &interners.string)
-            })
+            && self
+                .disruption_ids
+                .set_eq_by(&other.disruption_ids, |x, y| {
+                    x.eq_with(y, &interners.string)
+                })
     }
 }
 
@@ -323,11 +360,12 @@ impl ImpactedObject {
             typ: Interned::from(&mut interners.string, source.typ),
             id: Interned::from(&mut interners.string, source.id),
             name: Interned::from(&mut interners.string, source.name),
-            disruption_ids: source
-                .disruption_ids
-                .into_iter()
-                .map(|x| Interned::from(&mut interners.string, x))
-                .collect(),
+            disruption_ids: InternedSet::new(
+                source
+                    .disruption_ids
+                    .into_iter()
+                    .map(|x| Interned::from(&mut interners.string, x)),
+            ),
         }
     }
 }

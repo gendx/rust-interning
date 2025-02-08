@@ -1,7 +1,8 @@
 use crate::size::EstimateSize;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::hash::Hash;
+use std::hash::{Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Deref;
@@ -10,10 +11,39 @@ use std::rc::Rc;
 pub type IString = Interned<String>;
 pub type StringInterner = Interner<String>;
 
-#[derive(Debug, Hash, PartialEq, Eq)]
+#[derive(Debug)]
 pub struct Interned<T> {
     id: u32,
     _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T> PartialEq for Interned<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.id.eq(&other.id)
+    }
+}
+
+impl<T> Eq for Interned<T> {}
+
+impl<T> PartialOrd for Interned<T> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<T> Ord for Interned<T> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
+impl<T> Hash for Interned<T> {
+    fn hash<H>(&self, state: &mut H)
+    where
+        H: Hasher,
+    {
+        self.id.hash(state);
+    }
 }
 
 impl<T> EstimateSize for Interned<T> {
