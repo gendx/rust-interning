@@ -1,7 +1,7 @@
 use crate::size::EstimateSize;
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Data {
     #[serde(rename = "statusCode")]
@@ -25,7 +25,7 @@ impl EstimateSize for Data {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disruption {
     pub id: String,
@@ -55,7 +55,7 @@ impl EstimateSize for Disruption {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ApplicationPeriod {
     pub begin: String,
@@ -68,7 +68,7 @@ impl EstimateSize for ApplicationPeriod {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Line {
     pub id: String,
@@ -93,7 +93,7 @@ impl EstimateSize for Line {
     }
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ImpactedObject {
     #[serde(rename = "type")]

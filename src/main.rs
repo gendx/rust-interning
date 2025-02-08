@@ -1,6 +1,8 @@
+mod intern;
 mod schema;
 mod size;
 
+use intern::StringInterner;
 use size::EstimateSize;
 use std::fmt::Debug;
 use std::fs::{read_dir, DirEntry, File};
@@ -12,6 +14,7 @@ fn main() -> std::io::Result<()> {
     let mut file_error_count = 0;
     let mut total_input_bytes = 0;
     let mut total_parsed_bytes = 0;
+    let mut total_optimized_bytes = 0;
 
     let args = std::env::args();
     if args.len() <= 1 {
@@ -19,6 +22,8 @@ fn main() -> std::io::Result<()> {
             "Please pass a command line argument with a directory containing JSON files to parse."
         );
     }
+
+    let interner = StringInterner::default();
 
     for directory in args.skip(1) {
         eprintln!("Visiting directory: {directory:?}");
@@ -28,7 +33,7 @@ fn main() -> std::io::Result<()> {
             file.read_to_end(&mut data)?;
             total_input_bytes += data.len();
 
-            let data: Result<schema::Data, _> = serde_json::from_slice(&data);
+            let data: Result<schema::source::Data, _> = serde_json::from_slice(&data);
             let data = match data {
                 Ok(data) => data,
                 Err(err) => {
@@ -38,6 +43,14 @@ fn main() -> std::io::Result<()> {
                 }
             };
             total_parsed_bytes += data.estimated_bytes();
+
+            let optimized = schema::optimized::Data::from(&interner, data.clone());
+            total_optimized_bytes += optimized.estimated_bytes();
+
+            assert_eq!(
+                optimized, data,
+                "Optimized data didn't match original for file: {file_path:?}"
+            );
 
             file_count += 1;
             Ok(())
@@ -49,6 +62,13 @@ fn main() -> std::io::Result<()> {
         "Expanded to {total_parsed_bytes} bytes in memory (relative size = {:.02}%)",
         total_parsed_bytes as f64 * 100.0 / total_input_bytes as f64,
     );
+
+    total_optimized_bytes += interner.estimated_bytes();
+    println!(
+        "Optimized to {total_optimized_bytes} bytes (relative size = {:.02}%)",
+        total_optimized_bytes as f64 * 100.0 / total_input_bytes as f64,
+    );
+    interner.print_summary(total_optimized_bytes);
 
     Ok(())
 }
