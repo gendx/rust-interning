@@ -1,5 +1,6 @@
 use crate::size::EstimateSize;
 use serde::Deserialize;
+use uuid::Uuid;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,7 +31,7 @@ impl EstimateSize for Data {
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Disruption {
-    pub id: String,
+    pub id: Uuid,
     #[serde(rename = "applicationPeriods")]
     pub application_periods: Vec<ApplicationPeriod>,
     #[serde(rename = "lastUpdate")]
@@ -40,7 +41,7 @@ pub struct Disruption {
     pub tags: Option<Vec<String>>,
     pub title: String,
     pub message: String,
-    pub disruption_id: Option<String>,
+    pub disruption_id: Option<Uuid>,
 }
 
 impl EstimateSize for Disruption {
@@ -103,7 +104,7 @@ pub struct ImpactedObject {
     pub id: String,
     pub name: String,
     #[serde(rename = "disruptionIds")]
-    pub disruption_ids: Vec<String>,
+    pub disruption_ids: Vec<Uuid>,
 }
 
 impl EstimateSize for ImpactedObject {

@@ -1,4 +1,5 @@
 use std::mem::size_of;
+use uuid::Uuid;
 
 pub trait EstimateSize: Sized {
     fn allocated_bytes(&self) -> usize;
@@ -17,6 +18,12 @@ impl EstimateSize for i32 {
 impl EstimateSize for String {
     fn allocated_bytes(&self) -> usize {
         self.len()
+    }
+}
+
+impl EstimateSize for Uuid {
+    fn allocated_bytes(&self) -> usize {
+        0
     }
 }
 

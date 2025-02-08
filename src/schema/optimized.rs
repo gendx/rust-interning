@@ -2,11 +2,12 @@ use super::source;
 use crate::intern::{EqWith, IString, Interned, Interner, StringInterner};
 use crate::size::EstimateSize;
 use std::hash::Hash;
+use uuid::Uuid;
 
 #[derive(Default)]
 pub struct Interners {
     string: StringInterner,
-    string_set: Interner<InternedSet<String>>,
+    uuid: Interner<Uuid>,
     disruption_set: Interner<InternedSet<Disruption>>,
     disruption: Interner<Disruption>,
     application_period: Interner<ApplicationPeriod>,
@@ -15,12 +16,13 @@ pub struct Interners {
     line_header: Interner<LineHeader>,
     impacted_object: Interner<ImpactedObject>,
     object: Interner<Object>,
+    uuid_set: Interner<InternedSet<Uuid>>,
 }
 
 impl EstimateSize for Interners {
     fn allocated_bytes(&self) -> usize {
         self.string.allocated_bytes()
-            + self.string_set.allocated_bytes()
+            + self.uuid.allocated_bytes()
             + self.disruption_set.allocated_bytes()
             + self.disruption.allocated_bytes()
             + self.application_period.allocated_bytes()
@@ -29,14 +31,14 @@ impl EstimateSize for Interners {
             + self.line_header.allocated_bytes()
             + self.impacted_object.allocated_bytes()
             + self.object.allocated_bytes()
+            + self.uuid_set.allocated_bytes()
     }
 }
 
 impl Interners {
     pub fn print_summary(&self, total_bytes: usize) {
         self.string.print_summary("", "String", total_bytes);
-        self.string_set
-            .print_summary("", "InternedSet<String>", total_bytes);
+        self.uuid.print_summary("", "Uuid", total_bytes);
         self.disruption_set
             .print_summary("", "InternedSet<Disruption>", total_bytes);
         self.disruption
@@ -51,6 +53,8 @@ impl Interners {
         self.impacted_object
             .print_summary("    ", "ImpactedObject", total_bytes);
         self.object.print_summary("      ", "Object", total_bytes);
+        self.uuid_set
+            .print_summary("      ", "InternedSet<Uuid>", total_bytes);
     }
 }
 
@@ -240,7 +244,7 @@ impl Data {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Disruption {
-    pub id: IString,
+    pub id: Interned<Uuid>,
     pub application_periods: InternedSet<ApplicationPeriod>,
     pub last_update: IString,
     pub cause: IString,
@@ -248,7 +252,7 @@ pub struct Disruption {
     pub tags: Option<InternedSet<String>>,
     pub title: IString,
     pub message: IString,
-    pub disruption_id: Option<IString>,
+    pub disruption_id: Option<Interned<Uuid>>,
 }
 
 impl EstimateSize for Disruption {
@@ -267,7 +271,7 @@ impl EstimateSize for Disruption {
 
 impl EqWith<source::Disruption, Interners> for Disruption {
     fn eq_with(&self, other: &source::Disruption, interners: &Interners) -> bool {
-        self.id.eq_with(&other.id, &interners.string)
+        self.id.eq_with(&other.id, &interners.uuid)
             && self
                 .application_periods
                 .set_eq_by(&other.application_periods, |x, y| {
@@ -284,7 +288,7 @@ impl EqWith<source::Disruption, Interners> for Disruption {
             && self.title.eq_with(&other.title, &interners.string)
             && self.message.eq_with(&other.message, &interners.string)
             && option_eq_by(&self.disruption_id, &other.disruption_id, |x, y| {
-                x.eq_with(y, &interners.string)
+                x.eq_with(y, &interners.uuid)
             })
     }
 }
@@ -292,7 +296,7 @@ impl EqWith<source::Disruption, Interners> for Disruption {
 impl Disruption {
     pub fn from(interners: &mut Interners, source: source::Disruption) -> Self {
         Self {
-            id: Interned::from(&mut interners.string, source.id),
+            id: Interned::from(&mut interners.uuid, source.id),
             application_periods: InternedSet::new(source.application_periods.into_iter().map(
                 |x| {
                     let application_period = ApplicationPeriod::from(interners, x);
@@ -312,7 +316,7 @@ impl Disruption {
             message: Interned::from(&mut interners.string, source.message),
             disruption_id: source
                 .disruption_id
-                .map(|x| Interned::from(&mut interners.string, x)),
+                .map(|x| Interned::from(&mut interners.uuid, x)),
         }
     }
 }
@@ -426,7 +430,7 @@ impl EqWith<source::Line, Interners> for LineHeader {
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ImpactedObject {
     pub object: Interned<Object>,
-    pub disruption_ids: Interned<InternedSet<String>>,
+    pub disruption_ids: Interned<InternedSet<Uuid>>,
 }
 
 impl EstimateSize for ImpactedObject {
@@ -441,10 +445,8 @@ impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
             .eq_with_more(other, &interners.object, interners)
             && self
                 .disruption_ids
-                .lookup(&interners.string_set)
-                .set_eq_by(&other.disruption_ids, |x, y| {
-                    x.eq_with(y, &interners.string)
-                })
+                .lookup(&interners.uuid_set)
+                .set_eq_by(&other.disruption_ids, |x, y| x.eq_with(y, &interners.uuid))
     }
 }
 
@@ -454,7 +456,7 @@ impl ImpactedObject {
             source
                 .disruption_ids
                 .into_iter()
-                .map(|x| Interned::from(&mut interners.string, x)),
+                .map(|x| Interned::from(&mut interners.uuid, x)),
         );
         Self {
             object: Interned::from(
@@ -465,7 +467,7 @@ impl ImpactedObject {
                     name: Interned::from(&mut interners.string, source.name),
                 },
             ),
-            disruption_ids: Interned::from(&mut interners.string_set, disruption_ids),
+            disruption_ids: Interned::from(&mut interners.uuid_set, disruption_ids),
         }
     }
 }
