@@ -1,6 +1,10 @@
 use super::source;
 use crate::intern::{EqWith, IString, Interned, Interner, StringInterner};
 use crate::size::EstimateSize;
+use chrono::format::SecondsFormat;
+use chrono::offset::LocalResult;
+use chrono::{DateTime, NaiveDateTime};
+use chrono_tz::Europe::Paris;
 use std::hash::Hash;
 use uuid::Uuid;
 
@@ -113,11 +117,71 @@ impl<T> InternedSet<T> {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
+pub struct TimestampSecondsParis(i64);
+
+impl EstimateSize for TimestampSecondsParis {
+    fn allocated_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl TimestampSecondsParis {
+    fn from_formatted(x: &str, format: &str) -> Self {
+        let naive_datetime = NaiveDateTime::parse_from_str(x, format).unwrap_or_else(|_| {
+            panic!("Failed to parse datetime (custom format {format:?}) from {x}")
+        });
+        let datetime = match naive_datetime.and_local_timezone(Paris) {
+            LocalResult::Single(x) => x,
+            LocalResult::Ambiguous(earliest, latest) => {
+                eprintln!("Ambiguous mapping of {naive_datetime:?} to the Paris timezone: {earliest:?} or {latest:?}");
+                earliest
+            }
+            LocalResult::None => {
+                panic!("Invalid mapping of {naive_datetime:?} to the Paris timezone")
+            }
+        };
+        TimestampSecondsParis(datetime.timestamp())
+    }
+
+    fn to_formatted(&self, format: &str) -> String {
+        DateTime::from_timestamp(self.0, 0)
+            .unwrap()
+            .with_timezone(&Paris)
+            .naive_local()
+            .format(format)
+            .to_string()
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct TimestampMillis(i64);
+
+impl EstimateSize for TimestampMillis {
+    fn allocated_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl TimestampMillis {
+    fn from_rfc3339(x: &str) -> Self {
+        let datetime = DateTime::parse_from_rfc3339(x)
+            .unwrap_or_else(|_| panic!("Failed to parse datetime (RFC 3339 format) from {x}"));
+        TimestampMillis(datetime.timestamp_millis())
+    }
+
+    fn to_rfc3339(&self) -> String {
+        DateTime::from_timestamp_millis(self.0)
+            .unwrap()
+            .to_rfc3339_opts(SecondsFormat::Millis, true)
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub enum Data {
     Success {
         disruptions: Interned<InternedSet<Disruption>>,
         lines: Interned<InternedSet<Line>>,
-        last_updated_date: IString,
+        last_updated_date: TimestampMillis,
     },
     Error {
         status_code: i32,
@@ -170,7 +234,7 @@ impl EqWith<source::Data, Interners> for Data {
                 }) && other
                     .last_updated_date
                     .as_ref()
-                    .is_some_and(|other| last_updated_date.eq_with(other, &interners.string))
+                    .is_some_and(|other| last_updated_date.to_rfc3339() == *other)
                     && other.status_code.is_none()
                     && other.error.is_none()
                     && other.message.is_none()
@@ -222,7 +286,7 @@ impl Data {
                 Data::Success {
                     disruptions: Interned::from(&mut interners.disruption_set, disruptions),
                     lines: Interned::from(&mut interners.line_set, lines),
-                    last_updated_date: Interned::from(&mut interners.string, last_updated_date),
+                    last_updated_date: TimestampMillis::from_rfc3339(&last_updated_date),
                 }
             }
             source::Data {
@@ -246,7 +310,7 @@ impl Data {
 pub struct Disruption {
     pub id: Interned<Uuid>,
     pub application_periods: InternedSet<ApplicationPeriod>,
-    pub last_update: IString,
+    pub last_update: TimestampSecondsParis,
     pub cause: IString,
     pub severity: IString,
     pub tags: Option<InternedSet<String>>,
@@ -277,9 +341,7 @@ impl EqWith<source::Disruption, Interners> for Disruption {
                 .set_eq_by(&other.application_periods, |x, y| {
                     x.eq_with_more(y, &interners.application_period, interners)
                 })
-            && self
-                .last_update
-                .eq_with(&other.last_update, &interners.string)
+            && self.last_update.to_formatted("%Y%m%dT%H%M%S") == other.last_update
             && self.cause.eq_with(&other.cause, &interners.string)
             && self.severity.eq_with(&other.severity, &interners.string)
             && option_eq_by(&self.tags, &other.tags, |x, y| {
@@ -303,7 +365,10 @@ impl Disruption {
                     Interned::from(&mut interners.application_period, application_period)
                 },
             )),
-            last_update: Interned::from(&mut interners.string, source.last_update),
+            last_update: TimestampSecondsParis::from_formatted(
+                &source.last_update,
+                "%Y%m%dT%H%M%S",
+            ),
             cause: Interned::from(&mut interners.string, source.cause),
             severity: Interned::from(&mut interners.string, source.severity),
             tags: source.tags.map(|x| {
@@ -323,8 +388,8 @@ impl Disruption {
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct ApplicationPeriod {
-    pub begin: IString,
-    pub end: IString,
+    pub begin: TimestampSecondsParis,
+    pub end: TimestampSecondsParis,
 }
 
 impl EstimateSize for ApplicationPeriod {
@@ -334,17 +399,17 @@ impl EstimateSize for ApplicationPeriod {
 }
 
 impl EqWith<source::ApplicationPeriod, Interners> for ApplicationPeriod {
-    fn eq_with(&self, other: &source::ApplicationPeriod, interners: &Interners) -> bool {
-        self.begin.eq_with(&other.begin, &interners.string)
-            && self.end.eq_with(&other.end, &interners.string)
+    fn eq_with(&self, other: &source::ApplicationPeriod, _interners: &Interners) -> bool {
+        self.begin.to_formatted("%Y%m%dT%H%M%S") == other.begin
+            && self.end.to_formatted("%Y%m%dT%H%M%S") == other.end
     }
 }
 
 impl ApplicationPeriod {
-    pub fn from(interners: &mut Interners, source: source::ApplicationPeriod) -> Self {
+    pub fn from(_interners: &mut Interners, source: source::ApplicationPeriod) -> Self {
         Self {
-            begin: Interned::from(&mut interners.string, source.begin),
-            end: Interned::from(&mut interners.string, source.end),
+            begin: TimestampSecondsParis::from_formatted(&source.begin, "%Y%m%dT%H%M%S"),
+            end: TimestampSecondsParis::from_formatted(&source.end, "%Y%m%dT%H%M%S"),
         }
     }
 }
