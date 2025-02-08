@@ -89,74 +89,123 @@ impl<T> InternedSet<T> {
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct Data {
-    pub status_code: Option<i32>,
-    pub error: Option<IString>,
-    pub message: Option<IString>,
-    pub disruptions: Option<InternedSet<Disruption>>,
-    pub lines: Option<InternedSet<Line>>,
-    pub last_updated_date: Option<IString>,
+pub enum Data {
+    Success {
+        disruptions: InternedSet<Disruption>,
+        lines: InternedSet<Line>,
+        last_updated_date: IString,
+    },
+    Error {
+        status_code: i32,
+        error: IString,
+        message: IString,
+    },
 }
 
 impl EstimateSize for Data {
     fn allocated_bytes(&self) -> usize {
-        self.status_code.allocated_bytes()
-            + self.error.allocated_bytes()
-            + self.message.allocated_bytes()
-            + self.disruptions.allocated_bytes()
-            + self.lines.allocated_bytes()
-            + self.last_updated_date.allocated_bytes()
+        match self {
+            Data::Success {
+                disruptions,
+                lines,
+                last_updated_date,
+            } => {
+                disruptions.allocated_bytes()
+                    + lines.allocated_bytes()
+                    + last_updated_date.allocated_bytes()
+            }
+            Data::Error {
+                status_code,
+                error,
+                message,
+            } => {
+                status_code.allocated_bytes() + error.allocated_bytes() + message.allocated_bytes()
+            }
+        }
     }
 }
 
 impl EqWith<source::Data, Interners> for Data {
     fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
-        self.status_code == other.status_code
-            && option_eq_by(&self.error, &other.error, |x, y| {
-                x.eq_with(y, &interners.string)
-            })
-            && option_eq_by(&self.message, &other.message, |x, y| {
-                x.eq_with(y, &interners.string)
-            })
-            && option_eq_by(&self.disruptions, &other.disruptions, |x, y| {
-                x.set_eq_by(y, |x, y| {
-                    x.eq_with_more(y, &interners.disruption, interners)
-                })
-            })
-            && option_eq_by(&self.lines, &other.lines, |x, y| {
-                x.set_eq_by(y, |x, y| x.eq_with_more(y, &interners.line, interners))
-            })
-            && option_eq_by(&self.last_updated_date, &other.last_updated_date, |x, y| {
-                x.eq_with(y, &interners.string)
-            })
+        match self {
+            Data::Success {
+                disruptions,
+                lines,
+                last_updated_date,
+            } => {
+                other.disruptions.as_ref().is_some_and(|other| {
+                    disruptions.set_eq_by(other, |x, y| {
+                        x.eq_with_more(y, &interners.disruption, interners)
+                    })
+                }) && other.lines.as_ref().is_some_and(|other| {
+                    lines.set_eq_by(other, |x, y| x.eq_with_more(y, &interners.line, interners))
+                }) && other
+                    .last_updated_date
+                    .as_ref()
+                    .is_some_and(|other| last_updated_date.eq_with(other, &interners.string))
+                    && other.status_code.is_none()
+                    && other.error.is_none()
+                    && other.message.is_none()
+            }
+            Data::Error {
+                status_code,
+                error,
+                message,
+            } => {
+                other
+                    .status_code
+                    .as_ref()
+                    .is_some_and(|other| status_code == other)
+                    && other
+                        .error
+                        .as_ref()
+                        .is_some_and(|other| error.eq_with(other, &interners.string))
+                    && other
+                        .message
+                        .as_ref()
+                        .is_some_and(|other| message.eq_with(other, &interners.string))
+                    && other.disruptions.is_none()
+                    && other.lines.is_none()
+                    && other.last_updated_date.is_none()
+            }
+        }
     }
 }
 
 impl Data {
     pub fn from(interners: &mut Interners, source: source::Data) -> Self {
-        Self {
-            status_code: source.status_code,
-            error: source
-                .error
-                .map(|x| Interned::from(&mut interners.string, x)),
-            message: source
-                .message
-                .map(|x| Interned::from(&mut interners.string, x)),
-            disruptions: source.disruptions.map(|x| {
-                InternedSet::new(x.into_iter().map(|x| {
+        match source {
+            source::Data {
+                disruptions: Some(disruptions),
+                lines: Some(lines),
+                last_updated_date: Some(last_updated_date),
+                status_code: None,
+                error: None,
+                message: None,
+            } => Data::Success {
+                disruptions: InternedSet::new(disruptions.into_iter().map(|x| {
                     let disruption = Disruption::from(interners, x);
                     Interned::from(&mut interners.disruption, disruption)
-                }))
-            }),
-            lines: source.lines.map(|x| {
-                InternedSet::new(x.into_iter().map(|x| {
+                })),
+                lines: InternedSet::new(lines.into_iter().map(|x| {
                     let line = Line::from(interners, x);
                     Interned::from(&mut interners.line, line)
-                }))
-            }),
-            last_updated_date: source
-                .last_updated_date
-                .map(|x| Interned::from(&mut interners.string, x)),
+                })),
+                last_updated_date: Interned::from(&mut interners.string, last_updated_date),
+            },
+            source::Data {
+                disruptions: None,
+                lines: None,
+                last_updated_date: None,
+                status_code: Some(status_code),
+                error: Some(error),
+                message: Some(message),
+            } => Data::Error {
+                status_code,
+                error: Interned::from(&mut interners.string, error),
+                message: Interned::from(&mut interners.string, message),
+            },
+            _ => panic!("Invalid data: {source:?}"),
         }
     }
 }

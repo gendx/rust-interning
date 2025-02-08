@@ -4,24 +4,26 @@ use serde::Deserialize;
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Data {
-    #[serde(rename = "statusCode")]
-    pub status_code: Option<i32>,
-    pub error: Option<String>,
-    pub message: Option<String>,
+    // Success case.
     pub disruptions: Option<Vec<Disruption>>,
     pub lines: Option<Vec<Line>>,
     #[serde(rename = "lastUpdatedDate")]
     pub last_updated_date: Option<String>,
+    // Error case.
+    #[serde(rename = "statusCode")]
+    pub status_code: Option<i32>,
+    pub error: Option<String>,
+    pub message: Option<String>,
 }
 
 impl EstimateSize for Data {
     fn allocated_bytes(&self) -> usize {
-        self.status_code.allocated_bytes()
-            + self.error.allocated_bytes()
-            + self.message.allocated_bytes()
-            + self.disruptions.allocated_bytes()
+        self.disruptions.allocated_bytes()
             + self.lines.allocated_bytes()
             + self.last_updated_date.allocated_bytes()
+            + self.status_code.allocated_bytes()
+            + self.error.allocated_bytes()
+            + self.message.allocated_bytes()
     }
 }
 
