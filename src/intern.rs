@@ -12,7 +12,7 @@ pub type StringInterner = Interner<String>;
 
 #[derive(Debug, Hash, PartialEq, Eq)]
 pub struct Interned<T> {
-    id: usize,
+    id: u32,
     _phantom: PhantomData<fn() -> T>,
 }
 
@@ -62,7 +62,7 @@ impl<T: Eq + Hash> Interned<T> {
 
 pub struct Interner<T> {
     vec: Vec<Rc<T>>,
-    map: HashMap<Rc<T>, usize>,
+    map: HashMap<Rc<T>, u32>,
     references: usize,
 }
 
@@ -113,7 +113,7 @@ impl<T> Interner<T> {
 }
 
 impl<T: Eq + Hash> Interner<T> {
-    fn intern(&mut self, value: T) -> usize {
+    fn intern(&mut self, value: T) -> u32 {
         self.references += 1;
 
         if let Some(&id) = self.map.get(&value) {
@@ -121,13 +121,16 @@ impl<T: Eq + Hash> Interner<T> {
         }
 
         let id = self.vec.len();
+        assert!(id <= u32::MAX as usize);
+        let id = id as u32;
+
         let rc: Rc<T> = Rc::new(value);
         self.vec.push(Rc::clone(&rc));
         self.map.insert(rc, id);
         id
     }
 
-    fn lookup(&self, id: usize) -> Rc<T> {
-        Rc::clone(&self.vec[id])
+    fn lookup(&self, id: u32) -> Rc<T> {
+        Rc::clone(&self.vec[id as usize])
     }
 }
