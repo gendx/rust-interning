@@ -125,13 +125,29 @@ impl<T> Serialize for InternedSet<T> {
     where
         S: Serializer,
     {
-        let mut prev = 0;
-        serializer.collect_seq(self.set.iter().map(|x| {
+        let mut rle_encoded = Vec::with_capacity(self.set.len());
+        let mut prev: Option<u32> = None;
+        let mut streak: i32 = 0;
+
+        for x in &self.set {
             let id = x.id();
-            let diff = id - prev;
-            prev = id;
-            diff
-        }))
+            let diff = id - prev.unwrap_or(0);
+            if prev.is_some() && diff == 1 {
+                streak += 1;
+            } else {
+                if streak != 0 {
+                    rle_encoded.push(-streak);
+                    streak = 0;
+                }
+                rle_encoded.push(diff as i32);
+            }
+            prev = Some(id);
+        }
+        if streak != 0 {
+            rle_encoded.push(-streak);
+        }
+
+        serializer.collect_seq(rle_encoded)
     }
 }
 
@@ -173,9 +189,16 @@ impl<'de, T> Visitor<'de> for InternedSetVisitor<T> {
         };
 
         let mut prev = 0;
-        while let Some(x) = seq.next_element::<u32>()? {
-            prev += x;
-            set.push(Interned::from_id(prev));
+        while let Some(x) = seq.next_element::<i32>()? {
+            if x < 0 {
+                for _ in 0..-x {
+                    prev += 1;
+                    set.push(Interned::from_id(prev));
+                }
+            } else {
+                prev += x as u32;
+                set.push(Interned::from_id(prev));
+            }
         }
 
         Ok(InternedSet {
