@@ -40,7 +40,9 @@ pub struct Disruption {
     pub severity: String,
     pub tags: Option<Vec<String>>,
     pub title: String,
-    pub message: String,
+    pub message: Option<String>,
+    #[serde(rename = "shortMessage")]
+    pub short_message: Option<String>,
     pub disruption_id: Option<Uuid>,
 }
 
@@ -54,6 +56,7 @@ impl EstimateSize for Disruption {
             + self.tags.allocated_bytes()
             + self.title.allocated_bytes()
             + self.message.allocated_bytes()
+            + self.short_message.allocated_bytes()
             + self.disruption_id.allocated_bytes()
     }
 }

@@ -414,7 +414,8 @@ pub struct Disruption {
     pub severity: IString,
     pub tags: Option<InternedSet<String>>,
     pub title: IString,
-    pub message: IString,
+    pub message: Option<IString>,
+    pub short_message: Option<IString>,
     pub disruption_id: Option<Interned<Uuid>>,
 }
 
@@ -428,6 +429,7 @@ impl EstimateSize for Disruption {
             + self.tags.allocated_bytes()
             + self.title.allocated_bytes()
             + self.message.allocated_bytes()
+            + self.short_message.allocated_bytes()
             + self.disruption_id.allocated_bytes()
     }
 }
@@ -447,7 +449,12 @@ impl EqWith<source::Disruption, Interners> for Disruption {
                 x.set_eq_by(y, |x, y| x.eq_with(y, &interners.string))
             })
             && self.title.eq_with(&other.title, &interners.string)
-            && self.message.eq_with(&other.message, &interners.string)
+            && option_eq_by(&self.message, &other.message, |x, y| {
+                x.eq_with(y, &interners.string)
+            })
+            && option_eq_by(&self.short_message, &other.short_message, |x, y| {
+                x.eq_with(y, &interners.string)
+            })
             && option_eq_by(&self.disruption_id, &other.disruption_id, |x, y| {
                 x.eq_with(y, &interners.uuid)
             })
@@ -477,7 +484,12 @@ impl Disruption {
                 )
             }),
             title: Interned::from(&mut interners.string, source.title),
-            message: Interned::from(&mut interners.string, source.message),
+            message: source
+                .message
+                .map(|x| Interned::from(&mut interners.string, x)),
+            short_message: source
+                .short_message
+                .map(|x| Interned::from(&mut interners.string, x)),
             disruption_id: source
                 .disruption_id
                 .map(|x| Interned::from(&mut interners.uuid, x)),
