@@ -1,4 +1,6 @@
 use crate::size::EstimateSize;
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -11,10 +13,16 @@ use std::rc::Rc;
 pub type IString = Interned<String>;
 pub type StringInterner = Interner<String>;
 
-#[derive(Debug)]
+#[derive(Serialize, Deserialize)]
 pub struct Interned<T> {
     id: u32,
     _phantom: PhantomData<fn() -> T>,
+}
+
+impl<T> Debug for Interned<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        f.debug_tuple("I").field(&self.id).finish()
+    }
 }
 
 impl<T> PartialEq for Interned<T> {
@@ -90,6 +98,7 @@ impl<T: Eq + Hash> Interned<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct Interner<T> {
     vec: Vec<Rc<T>>,
     map: HashMap<Rc<T>, u32>,
@@ -105,6 +114,14 @@ impl<T> Default for Interner<T> {
         }
     }
 }
+
+impl<T: Eq + Hash> PartialEq for Interner<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.vec == other.vec && self.map == other.map
+    }
+}
+
+impl<T: Eq + Hash> Eq for Interner<T> {}
 
 impl<T: EstimateSize> EstimateSize for Interner<T> {
     fn allocated_bytes(&self) -> usize {
@@ -150,6 +167,11 @@ impl<T: Eq + Hash> Interner<T> {
             return id;
         }
 
+        self.push(value)
+    }
+
+    /// Unconditionally push a value, without validating that it's already interned.
+    fn push(&mut self, value: T) -> u32 {
         let id = self.vec.len();
         assert!(id <= u32::MAX as usize);
         let id = id as u32;
@@ -157,10 +179,75 @@ impl<T: Eq + Hash> Interner<T> {
         let rc: Rc<T> = Rc::new(value);
         self.vec.push(Rc::clone(&rc));
         self.map.insert(rc, id);
+
         id
     }
 
     fn lookup(&self, id: u32) -> Rc<T> {
         Rc::clone(&self.vec[id as usize])
+    }
+}
+
+impl<T: Serialize> Serialize for Interner<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.collect_seq(self.vec.iter().map(|rc| rc.deref()))
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Interner<T>
+where
+    T: Eq + Hash + Deserialize<'de>,
+{
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(InternerVisitor::new())
+    }
+}
+
+struct InternerVisitor<T> {
+    _phantom: PhantomData<fn() -> Interner<T>>,
+}
+
+impl<T> InternerVisitor<T> {
+    fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'de, T> Visitor<'de> for InternerVisitor<T>
+where
+    T: Eq + Hash + Deserialize<'de>,
+{
+    type Value = Interner<T>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a sequence of values")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut interner = match seq.size_hint() {
+            None => Interner::default(),
+            Some(size_hint) => Interner {
+                vec: Vec::with_capacity(size_hint),
+                map: HashMap::with_capacity(size_hint),
+                references: 0,
+            },
+        };
+
+        while let Some(t) = seq.next_element()? {
+            interner.push(t);
+        }
+
+        Ok(interner)
     }
 }
