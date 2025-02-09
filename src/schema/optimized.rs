@@ -180,37 +180,15 @@ impl TimestampMillis {
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Data {
-    Success {
-        disruptions: Interned<InternedSet<Disruption>>,
-        lines: Interned<InternedSet<Line>>,
-        last_updated_date: TimestampMillis,
-    },
-    Error {
-        status_code: i32,
-        error: IString,
-        message: IString,
-    },
+    Success(DataSuccess),
+    Error(DataError),
 }
 
 impl EstimateSize for Data {
     fn allocated_bytes(&self) -> usize {
         match self {
-            Data::Success {
-                disruptions,
-                lines,
-                last_updated_date,
-            } => {
-                disruptions.allocated_bytes()
-                    + lines.allocated_bytes()
-                    + last_updated_date.allocated_bytes()
-            }
-            Data::Error {
-                status_code,
-                error,
-                message,
-            } => {
-                status_code.allocated_bytes() + error.allocated_bytes() + message.allocated_bytes()
-            }
+            Data::Success(data) => data.allocated_bytes(),
+            Data::Error(data) => data.allocated_bytes(),
         }
     }
 }
@@ -218,50 +196,8 @@ impl EstimateSize for Data {
 impl EqWith<source::Data, Interners> for Data {
     fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
         match self {
-            Data::Success {
-                disruptions,
-                lines,
-                last_updated_date,
-            } => {
-                other.disruptions.as_ref().is_some_and(|other| {
-                    disruptions
-                        .lookup(&interners.disruption_set)
-                        .set_eq_by(other, |x, y| {
-                            x.eq_with_more(y, &interners.disruption, interners)
-                        })
-                }) && other.lines.as_ref().is_some_and(|other| {
-                    lines
-                        .lookup(&interners.line_set)
-                        .set_eq_by(other, |x, y| x.eq_with_more(y, &interners.line, interners))
-                }) && other
-                    .last_updated_date
-                    .as_ref()
-                    .is_some_and(|other| last_updated_date.to_rfc3339() == *other)
-                    && other.status_code.is_none()
-                    && other.error.is_none()
-                    && other.message.is_none()
-            }
-            Data::Error {
-                status_code,
-                error,
-                message,
-            } => {
-                other
-                    .status_code
-                    .as_ref()
-                    .is_some_and(|other| status_code == other)
-                    && other
-                        .error
-                        .as_ref()
-                        .is_some_and(|other| error.eq_with(other, &interners.string))
-                    && other
-                        .message
-                        .as_ref()
-                        .is_some_and(|other| message.eq_with(other, &interners.string))
-                    && other.disruptions.is_none()
-                    && other.lines.is_none()
-                    && other.last_updated_date.is_none()
-            }
+            Data::Success(data) => data.eq_with(other, interners),
+            Data::Error(data) => data.eq_with(other, interners),
         }
     }
 }
@@ -285,11 +221,11 @@ impl Data {
                     let line = Line::from(interners, x);
                     Interned::from(&mut interners.line, line)
                 }));
-                Data::Success {
+                Data::Success(DataSuccess {
                     disruptions: Interned::from(&mut interners.disruption_set, disruptions),
                     lines: Interned::from(&mut interners.line_set, lines),
                     last_updated_date: TimestampMillis::from_rfc3339(&last_updated_date),
-                }
+                })
             }
             source::Data {
                 disruptions: None,
@@ -298,13 +234,85 @@ impl Data {
                 status_code: Some(status_code),
                 error: Some(error),
                 message: Some(message),
-            } => Data::Error {
+            } => Data::Error(DataError {
                 status_code,
                 error: Interned::from(&mut interners.string, error),
                 message: Interned::from(&mut interners.string, message),
-            },
+            }),
             _ => panic!("Invalid data: {source:?}"),
         }
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+pub struct DataSuccess {
+    disruptions: Interned<InternedSet<Disruption>>,
+    lines: Interned<InternedSet<Line>>,
+    last_updated_date: TimestampMillis,
+}
+
+impl EstimateSize for DataSuccess {
+    fn allocated_bytes(&self) -> usize {
+        self.disruptions.allocated_bytes()
+            + self.lines.allocated_bytes()
+            + self.last_updated_date.allocated_bytes()
+    }
+}
+
+impl EqWith<source::Data, Interners> for DataSuccess {
+    fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
+        other.disruptions.as_ref().is_some_and(|other| {
+            self.disruptions
+                .lookup(&interners.disruption_set)
+                .set_eq_by(other, |x, y| {
+                    x.eq_with_more(y, &interners.disruption, interners)
+                })
+        }) && other.lines.as_ref().is_some_and(|other| {
+            self.lines
+                .lookup(&interners.line_set)
+                .set_eq_by(other, |x, y| x.eq_with_more(y, &interners.line, interners))
+        }) && other
+            .last_updated_date
+            .as_ref()
+            .is_some_and(|other| self.last_updated_date.to_rfc3339() == *other)
+            && other.status_code.is_none()
+            && other.error.is_none()
+            && other.message.is_none()
+    }
+}
+
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+pub struct DataError {
+    status_code: i32,
+    error: IString,
+    message: IString,
+}
+
+impl EstimateSize for DataError {
+    fn allocated_bytes(&self) -> usize {
+        self.status_code.allocated_bytes()
+            + self.error.allocated_bytes()
+            + self.message.allocated_bytes()
+    }
+}
+
+impl EqWith<source::Data, Interners> for DataError {
+    fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
+        other
+            .status_code
+            .as_ref()
+            .is_some_and(|other| self.status_code == *other)
+            && other
+                .error
+                .as_ref()
+                .is_some_and(|other| self.error.eq_with(other, &interners.string))
+            && other
+                .message
+                .as_ref()
+                .is_some_and(|other| self.message.eq_with(other, &interners.string))
+            && other.disruptions.is_none()
+            && other.lines.is_none()
+            && other.last_updated_date.is_none()
     }
 }
 
