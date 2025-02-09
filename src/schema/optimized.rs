@@ -5,9 +5,11 @@ use chrono::format::SecondsFormat;
 use chrono::offset::LocalResult;
 use chrono::{DateTime, NaiveDateTime};
 use chrono_tz::Europe::Paris;
-use serde::{Deserialize, Serialize};
+use serde::de::{SeqAccess, Visitor};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::hash::Hash;
+use std::marker::PhantomData;
 use uuid::Uuid;
 
 #[derive(Default, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
@@ -95,7 +97,7 @@ fn set_eq_by<T, U>(lhs: &[T], rhs: &[U], pred: impl Fn(&T, &U) -> bool) -> bool 
     true
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq)]
 pub struct InternedSet<T> {
     set: Box<[Interned<T>]>,
 }
@@ -115,6 +117,70 @@ impl<T> InternedSet<T> {
 
     fn set_eq_by<U>(&self, rhs: &[U], pred: impl Fn(&Interned<T>, &U) -> bool) -> bool {
         set_eq_by(&self.set, rhs, pred)
+    }
+}
+
+impl<T> Serialize for InternedSet<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut prev = 0;
+        serializer.collect_seq(self.set.iter().map(|x| {
+            let id = x.id();
+            let diff = id - prev;
+            prev = id;
+            diff
+        }))
+    }
+}
+
+impl<'de, T> Deserialize<'de> for InternedSet<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(InternedSetVisitor::new())
+    }
+}
+
+struct InternedSetVisitor<T> {
+    _phantom: PhantomData<fn() -> InternedSet<T>>,
+}
+
+impl<T> InternedSetVisitor<T> {
+    fn new() -> Self {
+        Self {
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<'de, T> Visitor<'de> for InternedSetVisitor<T> {
+    type Value = InternedSet<T>;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a sequence of values")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut set = match seq.size_hint() {
+            None => Vec::new(),
+            Some(size_hint) => Vec::with_capacity(size_hint),
+        };
+
+        let mut prev = 0;
+        while let Some(x) = seq.next_element::<u32>()? {
+            prev += x;
+            set.push(Interned::from_id(prev));
+        }
+
+        Ok(InternedSet {
+            set: set.into_boxed_slice(),
+        })
     }
 }
 

@@ -59,6 +59,19 @@ impl<T> EstimateSize for Interned<T> {
     }
 }
 
+impl<T> Interned<T> {
+    pub(crate) fn from_id(id: u32) -> Self {
+        Self {
+            id,
+            _phantom: PhantomData,
+        }
+    }
+
+    pub(crate) fn id(&self) -> u32 {
+        self.id
+    }
+}
+
 impl<T: Eq + Hash> Interned<T> {
     pub fn from(interner: &mut Interner<T>, value: T) -> Self {
         let id = interner.intern(value);
