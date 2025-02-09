@@ -1,7 +1,6 @@
 use crate::size::EstimateSize;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -14,7 +13,6 @@ use std::rc::Rc;
 pub type IString = Interned<String>;
 pub type StringInterner = Interner<String>;
 
-#[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct Interned<T> {
     id: u32,
     _phantom: PhantomData<fn() -> T>,
@@ -96,6 +94,104 @@ impl<T: Eq + Hash> Interned<T> {
         T: EqWith<U, Helper>,
     {
         self.lookup(interner).deref().eq_with(other, helper)
+    }
+}
+
+impl<T> Serialize for Interned<T> {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        serializer.serialize_u32(self.id)
+    }
+}
+
+impl<'de, T> Deserialize<'de> for Interned<T> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let id = deserializer.deserialize_u32(U32Visitor)?;
+        Ok(Self {
+            id,
+            _phantom: PhantomData,
+        })
+    }
+}
+
+struct U32Visitor;
+
+impl Visitor<'_> for U32Visitor {
+    type Value = u32;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("an integer between 0 and 2^32")
+    }
+
+    fn visit_u8<E>(self, value: u8) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(u32::from(value))
+    }
+
+    fn visit_u16<E>(self, value: u16) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(u32::from(value))
+    }
+
+    fn visit_u32<E>(self, value: u32) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        Ok(value)
+    }
+
+    fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        value
+            .try_into()
+            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
+    }
+
+    fn visit_i8<E>(self, value: i8) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        value
+            .try_into()
+            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
+    }
+
+    fn visit_i16<E>(self, value: i16) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        value
+            .try_into()
+            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
+    }
+
+    fn visit_i32<E>(self, value: i32) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        value
+            .try_into()
+            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
+    }
+
+    fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+    where
+        E: serde::de::Error,
+    {
+        value
+            .try_into()
+            .map_err(|_| E::custom(format!("u32 out of range: {}", value)))
     }
 }
 
