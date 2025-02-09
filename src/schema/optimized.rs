@@ -6,10 +6,11 @@ use chrono::offset::LocalResult;
 use chrono::{DateTime, NaiveDateTime};
 use chrono_tz::Europe::Paris;
 use serde::{Deserialize, Serialize};
+use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::hash::Hash;
 use uuid::Uuid;
 
-#[derive(Default, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Default, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct Interners {
     string: StringInterner,
     uuid: Interner<Uuid>,
@@ -307,7 +308,7 @@ impl Data {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct Disruption {
     pub id: Interned<Uuid>,
     pub application_periods: InternedSet<ApplicationPeriod>,
@@ -387,7 +388,7 @@ impl Disruption {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct ApplicationPeriod {
     pub begin: TimestampSecondsParis,
     pub end: TimestampSecondsParis,
@@ -415,7 +416,7 @@ impl ApplicationPeriod {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct Line {
     pub header: Interned<LineHeader>,
     pub impacted_objects: InternedSet<ImpactedObject>,
@@ -460,7 +461,7 @@ impl Line {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct LineHeader {
     pub id: IString,
     pub name: IString,
@@ -493,7 +494,7 @@ impl EqWith<source::Line, Interners> for LineHeader {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct ImpactedObject {
     pub object: Interned<Object>,
     pub disruption_ids: Interned<InternedSet<Uuid>>,
@@ -538,7 +539,7 @@ impl ImpactedObject {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
 pub struct Object {
     pub typ: IString,
     pub id: IString,

@@ -1,6 +1,7 @@
 use crate::size::EstimateSize;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -13,7 +14,7 @@ use std::rc::Rc;
 pub type IString = Interned<String>;
 pub type StringInterner = Interner<String>;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize_tuple, Deserialize_tuple)]
 pub struct Interned<T> {
     id: u32,
     _phantom: PhantomData<fn() -> T>,
