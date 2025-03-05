@@ -1,4 +1,4 @@
-#![feature(exit_status_error, iter_order_by)]
+#![feature(exit_status_error, hash_raw_entry, iter_order_by)]
 
 mod intern;
 mod schema;

@@ -273,11 +273,19 @@ impl<T: Eq + Hash> Interner<T> {
     fn intern(&mut self, value: T) -> u32 {
         self.references += 1;
 
-        if let Some(&id) = self.map.get(&value) {
-            return id;
-        }
+        let (_, id) = self
+            .map
+            .raw_entry_mut()
+            .from_key(&value)
+            .or_insert_with(|| {
+                let id = self.vec.len();
+                assert!(id <= u32::MAX as usize);
 
-        self.push(value)
+                let rc: Rc<T> = Rc::new(value);
+                self.vec.push(Rc::clone(&rc));
+                (rc, id as u32)
+            });
+        *id
     }
 
     /// Unconditionally push a value, without validating that it's already interned.
