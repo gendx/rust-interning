@@ -98,17 +98,17 @@ fn set_eq_by<T, U>(lhs: &[T], rhs: &[U], pred: impl Fn(&T, &U) -> bool) -> bool 
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct InternedSet<T> {
+pub struct InternedSet<T: ?Sized> {
     set: Box<[Interned<T>]>,
 }
 
-impl<T> EstimateSize for InternedSet<T> {
+impl<T: ?Sized> EstimateSize for InternedSet<T> {
     fn allocated_bytes(&self) -> usize {
         self.set.allocated_bytes()
     }
 }
 
-impl<T> InternedSet<T> {
+impl<T: ?Sized> InternedSet<T> {
     fn new(set: impl IntoIterator<Item = Interned<T>>) -> Self {
         let mut set: Box<[_]> = set.into_iter().collect();
         set.sort_unstable();
@@ -120,7 +120,7 @@ impl<T> InternedSet<T> {
     }
 }
 
-impl<T> Serialize for InternedSet<T> {
+impl<T: ?Sized> Serialize for InternedSet<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -151,7 +151,7 @@ impl<T> Serialize for InternedSet<T> {
     }
 }
 
-impl<'de, T> Deserialize<'de> for InternedSet<T> {
+impl<'de, T: ?Sized> Deserialize<'de> for InternedSet<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -160,11 +160,11 @@ impl<'de, T> Deserialize<'de> for InternedSet<T> {
     }
 }
 
-struct InternedSetVisitor<T> {
+struct InternedSetVisitor<T: ?Sized> {
     _phantom: PhantomData<fn() -> InternedSet<T>>,
 }
 
-impl<T> InternedSetVisitor<T> {
+impl<T: ?Sized> InternedSetVisitor<T> {
     fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -172,7 +172,7 @@ impl<T> InternedSetVisitor<T> {
     }
 }
 
-impl<'de, T> Visitor<'de> for InternedSetVisitor<T> {
+impl<'de, T: ?Sized> Visitor<'de> for InternedSetVisitor<T> {
     type Value = InternedSet<T>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
@@ -412,7 +412,7 @@ pub struct Disruption {
     pub last_update: TimestampSecondsParis,
     pub cause: IString,
     pub severity: IString,
-    pub tags: Option<InternedSet<String>>,
+    pub tags: Option<InternedSet<str>>,
     pub title: IString,
     pub message: Option<IString>,
     pub short_message: Option<IString>,

@@ -1,17 +1,39 @@
 use std::mem::size_of;
 use uuid::Uuid;
 
-pub trait EstimateSize: Sized {
+pub trait StackSize {
+    fn stack_bytes(&self) -> usize;
+}
+
+impl<T: Sized> StackSize for T {
+    fn stack_bytes(&self) -> usize {
+        size_of::<Self>()
+    }
+}
+
+pub trait EstimateSize: StackSize {
     fn allocated_bytes(&self) -> usize;
 
     fn estimated_bytes(&self) -> usize {
-        size_of::<Self>() + self.allocated_bytes()
+        self.stack_bytes() + self.allocated_bytes()
     }
 }
 
 impl EstimateSize for i32 {
     fn allocated_bytes(&self) -> usize {
         0
+    }
+}
+
+impl StackSize for str {
+    fn stack_bytes(&self) -> usize {
+        0
+    }
+}
+
+impl EstimateSize for str {
+    fn allocated_bytes(&self) -> usize {
+        self.len()
     }
 }
 

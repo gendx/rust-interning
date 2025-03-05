@@ -1,6 +1,7 @@
 use crate::size::EstimateSize;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -10,41 +11,41 @@ use std::mem::size_of;
 use std::ops::Deref;
 use std::rc::Rc;
 
-pub type IString = Interned<String>;
-pub type StringInterner = Interner<String>;
+pub type IString = Interned<str>;
+pub type StringInterner = Interner<str>;
 
-pub struct Interned<T> {
+pub struct Interned<T: ?Sized> {
     id: u32,
     _phantom: PhantomData<fn() -> T>,
 }
 
-impl<T> Debug for Interned<T> {
+impl<T: ?Sized> Debug for Interned<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
 
-impl<T> PartialEq for Interned<T> {
+impl<T: ?Sized> PartialEq for Interned<T> {
     fn eq(&self, other: &Self) -> bool {
         self.id.eq(&other.id)
     }
 }
 
-impl<T> Eq for Interned<T> {}
+impl<T: ?Sized> Eq for Interned<T> {}
 
-impl<T> PartialOrd for Interned<T> {
+impl<T: ?Sized> PartialOrd for Interned<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T> Ord for Interned<T> {
+impl<T: ?Sized> Ord for Interned<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.id.cmp(&other.id)
     }
 }
 
-impl<T> Hash for Interned<T> {
+impl<T: ?Sized> Hash for Interned<T> {
     fn hash<H>(&self, state: &mut H)
     where
         H: Hasher,
@@ -53,13 +54,13 @@ impl<T> Hash for Interned<T> {
     }
 }
 
-impl<T> EstimateSize for Interned<T> {
+impl<T: ?Sized> EstimateSize for Interned<T> {
     fn allocated_bytes(&self) -> usize {
         0
     }
 }
 
-impl<T> Interned<T> {
+impl<T: ?Sized> Interned<T> {
     pub(crate) fn from_id(id: u32) -> Self {
         Self {
             id,
@@ -72,8 +73,8 @@ impl<T> Interned<T> {
     }
 }
 
-impl<T: Eq + Hash> Interned<T> {
-    pub fn from(interner: &mut Interner<T>, value: T) -> Self {
+impl<T: ?Sized + Eq + Hash> Interned<T> {
+    pub fn from(interner: &mut Interner<T>, value: impl Borrow<T> + Into<Rc<T>>) -> Self {
         let id = interner.intern(value);
         Self {
             id,
@@ -86,17 +87,17 @@ impl<T: Eq + Hash> Interned<T> {
     }
 }
 
-pub trait EqWith<Rhs, Helper> {
+pub trait EqWith<Rhs: ?Sized, Helper: ?Sized> {
     fn eq_with(&self, other: &Rhs, helper: &Helper) -> bool;
 }
 
-impl<T: Eq + Hash> EqWith<T, Interner<T>> for Interned<T> {
+impl<T: ?Sized + Eq + Hash> EqWith<T, Interner<T>> for Interned<T> {
     fn eq_with(&self, other: &T, interner: &Interner<T>) -> bool {
         self.lookup(interner).deref() == other
     }
 }
 
-impl<T: Eq + Hash> Interned<T> {
+impl<T: ?Sized + Eq + Hash> Interned<T> {
     pub fn eq_with_more<U, Helper>(
         &self,
         other: &U,
@@ -110,7 +111,7 @@ impl<T: Eq + Hash> Interned<T> {
     }
 }
 
-impl<T> Serialize for Interned<T> {
+impl<T: ?Sized> Serialize for Interned<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -119,7 +120,7 @@ impl<T> Serialize for Interned<T> {
     }
 }
 
-impl<'de, T> Deserialize<'de> for Interned<T> {
+impl<'de, T: ?Sized> Deserialize<'de> for Interned<T> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -209,13 +210,13 @@ impl Visitor<'_> for U32Visitor {
 }
 
 #[derive(Debug)]
-pub struct Interner<T> {
+pub struct Interner<T: ?Sized> {
     vec: Vec<Rc<T>>,
     map: HashMap<Rc<T>, u32>,
     references: usize,
 }
 
-impl<T> Default for Interner<T> {
+impl<T: ?Sized> Default for Interner<T> {
     fn default() -> Self {
         Self {
             vec: Vec::new(),
@@ -225,22 +226,22 @@ impl<T> Default for Interner<T> {
     }
 }
 
-impl<T: Eq + Hash> PartialEq for Interner<T> {
+impl<T: ?Sized + Eq + Hash> PartialEq for Interner<T> {
     fn eq(&self, other: &Self) -> bool {
         self.vec == other.vec && self.map == other.map
     }
 }
 
-impl<T: Eq + Hash> Eq for Interner<T> {}
+impl<T: ?Sized + Eq + Hash> Eq for Interner<T> {}
 
-impl<T: EstimateSize> EstimateSize for Interner<T> {
+impl<T: ?Sized + EstimateSize> EstimateSize for Interner<T> {
     fn allocated_bytes(&self) -> usize {
         self.vec.iter().map(|x| x.estimated_bytes()).sum::<usize>()
             + self.map.capacity() * size_of::<Rc<T>>()
     }
 }
 
-impl<T: EstimateSize> Interner<T> {
+impl<T: ?Sized + EstimateSize> Interner<T> {
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
         let len = self.len();
         let references = self.references();
@@ -259,7 +260,7 @@ impl<T: EstimateSize> Interner<T> {
     }
 }
 
-impl<T> Interner<T> {
+impl<T: ?Sized> Interner<T> {
     fn len(&self) -> usize {
         self.vec.len()
     }
@@ -269,19 +270,19 @@ impl<T> Interner<T> {
     }
 }
 
-impl<T: Eq + Hash> Interner<T> {
-    fn intern(&mut self, value: T) -> u32 {
+impl<T: ?Sized + Eq + Hash> Interner<T> {
+    fn intern(&mut self, value: impl Borrow<T> + Into<Rc<T>>) -> u32 {
         self.references += 1;
 
         let (_, id) = self
             .map
             .raw_entry_mut()
-            .from_key(&value)
+            .from_key(value.borrow())
             .or_insert_with(|| {
                 let id = self.vec.len();
                 assert!(id <= u32::MAX as usize);
 
-                let rc: Rc<T> = Rc::new(value);
+                let rc: Rc<T> = value.into();
                 self.vec.push(Rc::clone(&rc));
                 (rc, id as u32)
             });
@@ -289,14 +290,13 @@ impl<T: Eq + Hash> Interner<T> {
     }
 
     /// Unconditionally push a value, without validating that it's already interned.
-    fn push(&mut self, value: T) -> u32 {
+    fn push(&mut self, value: Rc<T>) -> u32 {
         let id = self.vec.len();
         assert!(id <= u32::MAX as usize);
         let id = id as u32;
 
-        let rc: Rc<T> = Rc::new(value);
-        self.vec.push(Rc::clone(&rc));
-        self.map.insert(rc, id);
+        self.vec.push(Rc::clone(&value));
+        self.map.insert(value, id);
 
         id
     }
@@ -306,7 +306,7 @@ impl<T: Eq + Hash> Interner<T> {
     }
 }
 
-impl<T: Serialize> Serialize for Interner<T> {
+impl<T: ?Sized + Serialize> Serialize for Interner<T> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -317,7 +317,8 @@ impl<T: Serialize> Serialize for Interner<T> {
 
 impl<'de, T> Deserialize<'de> for Interner<T>
 where
-    T: Eq + Hash + Deserialize<'de>,
+    T: ?Sized + Eq + Hash,
+    Rc<T>: Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -327,11 +328,11 @@ where
     }
 }
 
-struct InternerVisitor<T> {
+struct InternerVisitor<T: ?Sized> {
     _phantom: PhantomData<fn() -> Interner<T>>,
 }
 
-impl<T> InternerVisitor<T> {
+impl<T: ?Sized> InternerVisitor<T> {
     fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -341,7 +342,8 @@ impl<T> InternerVisitor<T> {
 
 impl<'de, T> Visitor<'de> for InternerVisitor<T>
 where
-    T: Eq + Hash + Deserialize<'de>,
+    T: ?Sized + Eq + Hash,
+    Rc<T>: Deserialize<'de>,
 {
     type Value = Interner<T>;
 
@@ -367,5 +369,31 @@ where
         }
 
         Ok(interner)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::borrow::Cow;
+
+    #[test]
+    fn test_str_interner() {
+        let mut interner: Interner<str> = Interner::default();
+
+        let key: &str = "Hello";
+        assert_eq!(interner.intern(key), 0);
+
+        let key: String = "world".into();
+        assert_eq!(interner.intern(key), 1);
+
+        let key: Box<str> = "Hello".into();
+        assert_eq!(interner.intern(key), 0);
+
+        let key: Rc<str> = "world".into();
+        assert_eq!(interner.intern(key), 1);
+
+        let key: Cow<'_, str> = "Hello world".into();
+        assert_eq!(interner.intern(key), 2);
     }
 }
