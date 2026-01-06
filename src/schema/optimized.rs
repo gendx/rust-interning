@@ -292,7 +292,7 @@ impl EqWith<source::Data, Interners> for Data {
 }
 
 impl Data {
-    pub fn from(interners: &mut Interners, source: source::Data) -> Self {
+    pub fn from(interners: &Interners, source: source::Data) -> Self {
         match source {
             source::Data {
                 disruptions: Some(disruptions),
@@ -304,15 +304,15 @@ impl Data {
             } => {
                 let disruptions = InternedSet::new(disruptions.into_iter().map(|x| {
                     let disruption = Disruption::from(interners, x);
-                    Interned::from(&mut interners.disruption, disruption)
+                    Interned::from(&interners.disruption, disruption)
                 }));
                 let lines = InternedSet::new(lines.into_iter().map(|x| {
                     let line = Line::from(interners, x);
-                    Interned::from(&mut interners.line, line)
+                    Interned::from(&interners.line, line)
                 }));
                 Data::Success(DataSuccess {
-                    disruptions: Interned::from(&mut interners.disruption_set, disruptions),
-                    lines: Interned::from(&mut interners.line_set, lines),
+                    disruptions: Interned::from(&interners.disruption_set, disruptions),
+                    lines: Interned::from(&interners.line_set, lines),
                     last_updated_date: TimestampMillis::from_rfc3339(&last_updated_date),
                 })
             }
@@ -325,8 +325,8 @@ impl Data {
                 message: Some(message),
             } => Data::Error(DataError {
                 status_code,
-                error: Interned::from(&mut interners.string, error),
-                message: Interned::from(&mut interners.string, message),
+                error: Interned::from(&interners.string, error),
+                message: Interned::from(&interners.string, message),
             }),
             _ => panic!("Invalid data: {source:?}"),
         }
@@ -462,37 +462,32 @@ impl EqWith<source::Disruption, Interners> for Disruption {
 }
 
 impl Disruption {
-    pub fn from(interners: &mut Interners, source: source::Disruption) -> Self {
+    pub fn from(interners: &Interners, source: source::Disruption) -> Self {
         Self {
-            id: Interned::from(&mut interners.uuid, source.id),
+            id: Interned::from(&interners.uuid, source.id),
             application_periods: InternedSet::new(source.application_periods.into_iter().map(
                 |x| {
                     let application_period = ApplicationPeriod::from(interners, x);
-                    Interned::from(&mut interners.application_period, application_period)
+                    Interned::from(&interners.application_period, application_period)
                 },
             )),
             last_update: TimestampSecondsParis::from_formatted(
                 &source.last_update,
                 "%Y%m%dT%H%M%S",
             ),
-            cause: Interned::from(&mut interners.string, source.cause),
-            severity: Interned::from(&mut interners.string, source.severity),
+            cause: Interned::from(&interners.string, source.cause),
+            severity: Interned::from(&interners.string, source.severity),
             tags: source.tags.map(|x| {
-                InternedSet::new(
-                    x.into_iter()
-                        .map(|x| Interned::from(&mut interners.string, x)),
-                )
+                InternedSet::new(x.into_iter().map(|x| Interned::from(&interners.string, x)))
             }),
-            title: Interned::from(&mut interners.string, source.title),
-            message: source
-                .message
-                .map(|x| Interned::from(&mut interners.string, x)),
+            title: Interned::from(&interners.string, source.title),
+            message: source.message.map(|x| Interned::from(&interners.string, x)),
             short_message: source
                 .short_message
-                .map(|x| Interned::from(&mut interners.string, x)),
+                .map(|x| Interned::from(&interners.string, x)),
             disruption_id: source
                 .disruption_id
-                .map(|x| Interned::from(&mut interners.uuid, x)),
+                .map(|x| Interned::from(&interners.uuid, x)),
         }
     }
 }
@@ -517,7 +512,7 @@ impl EqWith<source::ApplicationPeriod, Interners> for ApplicationPeriod {
 }
 
 impl ApplicationPeriod {
-    pub fn from(_interners: &mut Interners, source: source::ApplicationPeriod) -> Self {
+    pub fn from(_interners: &Interners, source: source::ApplicationPeriod) -> Self {
         Self {
             begin: TimestampSecondsParis::from_formatted(&source.begin, "%Y%m%dT%H%M%S"),
             end: TimestampSecondsParis::from_formatted(&source.end, "%Y%m%dT%H%M%S"),
@@ -550,21 +545,21 @@ impl EqWith<source::Line, Interners> for Line {
 }
 
 impl Line {
-    pub fn from(interners: &mut Interners, source: source::Line) -> Self {
+    pub fn from(interners: &Interners, source: source::Line) -> Self {
         Self {
             header: Interned::from(
-                &mut interners.line_header,
+                &interners.line_header,
                 LineHeader {
-                    id: Interned::from(&mut interners.string, source.id),
-                    name: Interned::from(&mut interners.string, source.name),
-                    short_name: Interned::from(&mut interners.string, source.short_name),
-                    mode: Interned::from(&mut interners.string, source.mode),
-                    network_id: Interned::from(&mut interners.string, source.network_id),
+                    id: Interned::from(&interners.string, source.id),
+                    name: Interned::from(&interners.string, source.name),
+                    short_name: Interned::from(&interners.string, source.short_name),
+                    mode: Interned::from(&interners.string, source.mode),
+                    network_id: Interned::from(&interners.string, source.network_id),
                 },
             ),
             impacted_objects: InternedSet::new(source.impacted_objects.into_iter().map(|x| {
                 let impacted_object = ImpactedObject::from(interners, x);
-                Interned::from(&mut interners.impacted_object, impacted_object)
+                Interned::from(&interners.impacted_object, impacted_object)
             })),
         }
     }
@@ -627,23 +622,23 @@ impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
 }
 
 impl ImpactedObject {
-    pub fn from(interners: &mut Interners, source: source::ImpactedObject) -> Self {
+    pub fn from(interners: &Interners, source: source::ImpactedObject) -> Self {
         let disruption_ids = InternedSet::new(
             source
                 .disruption_ids
                 .into_iter()
-                .map(|x| Interned::from(&mut interners.uuid, x)),
+                .map(|x| Interned::from(&interners.uuid, x)),
         );
         Self {
             object: Interned::from(
-                &mut interners.object,
+                &interners.object,
                 Object {
-                    typ: Interned::from(&mut interners.string, source.typ),
-                    id: Interned::from(&mut interners.string, source.id),
-                    name: Interned::from(&mut interners.string, source.name),
+                    typ: Interned::from(&interners.string, source.typ),
+                    id: Interned::from(&interners.string, source.id),
+                    name: Interned::from(&interners.string, source.name),
                 },
             ),
-            disruption_ids: Interned::from(&mut interners.uuid_set, disruption_ids),
+            disruption_ids: Interned::from(&interners.uuid_set, disruption_ids),
         }
     }
 }

@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let mut interners = Interners::default();
+    let interners = Interners::default();
     let mut datas = Vec::new();
 
     args.next(); // Ignoring the program path.
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             total_parsed_bytes += data.estimated_bytes();
 
-            let optimized = schema::optimized::Data::from(&mut interners, data.clone());
+            let optimized = schema::optimized::Data::from(&interners, data.clone());
             total_optimized_bytes += optimized.estimated_bytes();
 
             assert!(

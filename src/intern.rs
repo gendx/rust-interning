@@ -12,6 +12,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Deref;
 use std::rc::Rc;
+use std::sync::atomic::{self, AtomicUsize};
 
 pub type IString = Interned<str>;
 pub type StringInterner = Interner<str>;
@@ -76,7 +77,7 @@ impl<T: ?Sized> Interned<T> {
 }
 
 impl<T: ?Sized + Eq + Hash> Interned<T> {
-    pub fn from(interner: &mut Interner<T>, value: impl Borrow<T> + Into<Rc<T>>) -> Self {
+    pub fn from(interner: &Interner<T>, value: impl Borrow<T> + Into<Rc<T>>) -> Self {
         let id = interner.intern(value);
         Self {
             id,
@@ -215,7 +216,7 @@ pub struct Interner<T: ?Sized> {
     vec: AppendVec<Rc<T>>,
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
-    references: usize,
+    references: AtomicUsize,
 }
 
 impl<T: ?Sized> Default for Interner<T> {
@@ -224,7 +225,7 @@ impl<T: ?Sized> Default for Interner<T> {
             vec: AppendVec::new(),
             map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
-            references: 0,
+            references: AtomicUsize::new(0),
         }
     }
 }
@@ -275,13 +276,13 @@ impl<T: ?Sized> Interner<T> {
     }
 
     fn references(&self) -> usize {
-        self.references
+        self.references.load(atomic::Ordering::Relaxed)
     }
 }
 
 impl<T: ?Sized + Eq + Hash> Interner<T> {
-    fn intern(&mut self, value: impl Borrow<T> + Into<Rc<T>>) -> u32 {
-        self.references += 1;
+    fn intern(&self, value: impl Borrow<T> + Into<Rc<T>>) -> u32 {
+        self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         let hash = self.hasher.hash_one(value.borrow());
         *self
@@ -375,7 +376,7 @@ where
                 vec: AppendVec::with_capacity(size_hint),
                 map: DashTable::with_capacity(size_hint),
                 hasher: DefaultHashBuilder::default(),
-                references: 0,
+                references: AtomicUsize::new(0),
             },
         };
 
@@ -394,7 +395,7 @@ mod test {
 
     #[test]
     fn test_str_interner() {
-        let mut interner: Interner<str> = Interner::default();
+        let interner: Interner<str> = Interner::default();
 
         let key: &str = "Hello";
         assert_eq!(interner.intern(key), 0);
