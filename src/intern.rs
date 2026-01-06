@@ -228,7 +228,7 @@ impl<T: ?Sized> Default for Interner<T> {
 
 impl<T: ?Sized + Eq + Hash> PartialEq for Interner<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.vec == other.vec && self.map == other.map
+        self.vec == other.vec
     }
 }
 
