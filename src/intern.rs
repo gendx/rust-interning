@@ -1,12 +1,12 @@
 use crate::size::EstimateSize;
 use appendvec::AppendVec;
-use hashbrown::HashMap;
+use hashbrown::{DefaultHashBuilder, HashTable};
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Borrow;
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::hash::{Hash, Hasher};
+use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Deref;
@@ -212,7 +212,8 @@ impl Visitor<'_> for U32Visitor {
 
 pub struct Interner<T: ?Sized> {
     vec: AppendVec<Rc<T>>,
-    map: HashMap<Rc<T>, u32>,
+    map: HashTable<u32>,
+    hasher: DefaultHashBuilder,
     references: usize,
 }
 
@@ -220,7 +221,8 @@ impl<T: ?Sized> Default for Interner<T> {
     fn default() -> Self {
         Self {
             vec: AppendVec::new(),
-            map: HashMap::new(),
+            map: HashTable::new(),
+            hasher: DefaultHashBuilder::default(),
             references: 0,
         }
     }
@@ -243,7 +245,7 @@ impl<T: ?Sized + Eq + Hash> Eq for Interner<T> {}
 impl<T: ?Sized + EstimateSize> EstimateSize for Interner<T> {
     fn allocated_bytes(&self) -> usize {
         self.vec.iter().map(|x| x.estimated_bytes()).sum::<usize>()
-            + self.map.capacity() * size_of::<Rc<T>>()
+            + self.map.capacity() * size_of::<u32>()
     }
 }
 
@@ -280,27 +282,34 @@ impl<T: ?Sized + Eq + Hash> Interner<T> {
     fn intern(&mut self, value: impl Borrow<T> + Into<Rc<T>>) -> u32 {
         self.references += 1;
 
-        let (_, id) = self
+        let hash = self.hasher.hash_one(value.borrow());
+        *self
             .map
-            .raw_entry_mut()
-            .from_key(value.borrow())
+            .entry(
+                hash,
+                |&i| self.vec[i as usize].deref() == value.borrow(),
+                |&i| self.hasher.hash_one(self.vec[i as usize].deref()),
+            )
             .or_insert_with(|| {
                 let rc: Rc<T> = value.into();
-                let id = self.vec.push(Rc::clone(&rc));
+                let id = self.vec.push(rc);
                 assert!(id <= u32::MAX as usize);
-
-                (rc, id as u32)
-            });
-        *id
+                id as u32
+            })
+            .get()
     }
 
     /// Unconditionally push a value, without validating that it's already interned.
     fn push(&mut self, value: Rc<T>) -> u32 {
+        let hash = self.hasher.hash_one(value.deref());
+
         let id = self.vec.push_mut(Rc::clone(&value));
         assert!(id <= u32::MAX as usize);
         let id = id as u32;
 
-        self.map.insert(value, id);
+        self.map.insert_unique(hash, id, |&i| {
+            self.hasher.hash_one(self.vec[i as usize].deref())
+        });
 
         id
     }
@@ -363,7 +372,8 @@ where
             None => Interner::default(),
             Some(size_hint) => Interner {
                 vec: AppendVec::with_capacity(size_hint),
-                map: HashMap::with_capacity(size_hint),
+                map: HashTable::with_capacity(size_hint),
+                hasher: DefaultHashBuilder::default(),
                 references: 0,
             },
         };
