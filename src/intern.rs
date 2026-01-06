@@ -1,4 +1,5 @@
 use crate::size::EstimateSize;
+use appendvec::AppendVec;
 use hashbrown::HashMap;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -20,7 +21,7 @@ pub struct Interned<T: ?Sized> {
 }
 
 impl<T: ?Sized> Debug for Interned<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_tuple("I").field(&self.id).finish()
     }
 }
@@ -209,9 +210,8 @@ impl Visitor<'_> for U32Visitor {
     }
 }
 
-#[derive(Debug)]
 pub struct Interner<T: ?Sized> {
-    vec: Vec<Rc<T>>,
+    vec: AppendVec<Rc<T>>,
     map: HashMap<Rc<T>, u32>,
     references: usize,
 }
@@ -219,16 +219,22 @@ pub struct Interner<T: ?Sized> {
 impl<T: ?Sized> Default for Interner<T> {
     fn default() -> Self {
         Self {
-            vec: Vec::new(),
+            vec: AppendVec::new(),
             map: HashMap::new(),
             references: 0,
         }
     }
 }
 
+impl<T: ?Sized + Debug> Debug for Interner<T> {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        fmt.debug_list().entries(self.vec.iter()).finish()
+    }
+}
+
 impl<T: ?Sized + Eq + Hash> PartialEq for Interner<T> {
     fn eq(&self, other: &Self) -> bool {
-        self.vec == other.vec
+        self.vec.iter().eq(other.vec.iter())
     }
 }
 
@@ -279,11 +285,10 @@ impl<T: ?Sized + Eq + Hash> Interner<T> {
             .raw_entry_mut()
             .from_key(value.borrow())
             .or_insert_with(|| {
-                let id = self.vec.len();
+                let rc: Rc<T> = value.into();
+                let id = self.vec.push(Rc::clone(&rc));
                 assert!(id <= u32::MAX as usize);
 
-                let rc: Rc<T> = value.into();
-                self.vec.push(Rc::clone(&rc));
                 (rc, id as u32)
             });
         *id
@@ -291,11 +296,10 @@ impl<T: ?Sized + Eq + Hash> Interner<T> {
 
     /// Unconditionally push a value, without validating that it's already interned.
     fn push(&mut self, value: Rc<T>) -> u32 {
-        let id = self.vec.len();
+        let id = self.vec.push_mut(Rc::clone(&value));
         assert!(id <= u32::MAX as usize);
         let id = id as u32;
 
-        self.vec.push(Rc::clone(&value));
         self.map.insert(value, id);
 
         id
@@ -358,7 +362,7 @@ where
         let mut interner = match seq.size_hint() {
             None => Interner::default(),
             Some(size_hint) => Interner {
-                vec: Vec::with_capacity(size_hint),
+                vec: AppendVec::with_capacity(size_hint),
                 map: HashMap::with_capacity(size_hint),
                 references: 0,
             },
