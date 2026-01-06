@@ -1,6 +1,7 @@
 use crate::size::EstimateSize;
 use appendvec::AppendVec;
-use hashbrown::{DefaultHashBuilder, HashTable};
+use dashtable::DashTable;
+use hashbrown::DefaultHashBuilder;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::borrow::Borrow;
@@ -212,7 +213,7 @@ impl Visitor<'_> for U32Visitor {
 
 pub struct Interner<T: ?Sized> {
     vec: AppendVec<Rc<T>>,
-    map: HashTable<u32>,
+    map: DashTable<u32>,
     hasher: DefaultHashBuilder,
     references: usize,
 }
@@ -221,7 +222,7 @@ impl<T: ?Sized> Default for Interner<T> {
     fn default() -> Self {
         Self {
             vec: AppendVec::new(),
-            map: HashTable::new(),
+            map: DashTable::new(),
             hasher: DefaultHashBuilder::default(),
             references: 0,
         }
@@ -245,7 +246,7 @@ impl<T: ?Sized + Eq + Hash> Eq for Interner<T> {}
 impl<T: ?Sized + EstimateSize> EstimateSize for Interner<T> {
     fn allocated_bytes(&self) -> usize {
         self.vec.iter().map(|x| x.estimated_bytes()).sum::<usize>()
-            + self.map.capacity() * size_of::<u32>()
+            + self.vec.len() * size_of::<u32>()
     }
 }
 
@@ -372,7 +373,7 @@ where
             None => Interner::default(),
             Some(size_hint) => Interner {
                 vec: AppendVec::with_capacity(size_hint),
-                map: HashTable::with_capacity(size_hint),
+                map: DashTable::with_capacity(size_hint),
                 hasher: DefaultHashBuilder::default(),
                 references: 0,
             },
