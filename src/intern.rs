@@ -11,8 +11,8 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::ops::Deref;
-use std::rc::Rc;
 use std::sync::atomic::{self, AtomicUsize};
+use std::sync::Arc;
 
 pub type IString = Interned<str>;
 pub type StringInterner = Interner<str>;
@@ -77,7 +77,7 @@ impl<T: ?Sized> Interned<T> {
 }
 
 impl<T: ?Sized + Eq + Hash> Interned<T> {
-    pub fn from(interner: &Interner<T>, value: impl Borrow<T> + Into<Rc<T>>) -> Self {
+    pub fn from(interner: &Interner<T>, value: impl Borrow<T> + Into<Arc<T>>) -> Self {
         let id = interner.intern(value);
         Self {
             id,
@@ -85,7 +85,7 @@ impl<T: ?Sized + Eq + Hash> Interned<T> {
         }
     }
 
-    pub fn lookup(&self, interner: &Interner<T>) -> Rc<T> {
+    pub fn lookup(&self, interner: &Interner<T>) -> Arc<T> {
         interner.lookup(self.id)
     }
 }
@@ -213,7 +213,7 @@ impl Visitor<'_> for U32Visitor {
 }
 
 pub struct Interner<T: ?Sized> {
-    vec: AppendVec<Rc<T>>,
+    vec: AppendVec<Arc<T>>,
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
     references: AtomicUsize,
@@ -281,7 +281,7 @@ impl<T: ?Sized> Interner<T> {
 }
 
 impl<T: ?Sized + Eq + Hash> Interner<T> {
-    fn intern(&self, value: impl Borrow<T> + Into<Rc<T>>) -> u32 {
+    fn intern(&self, value: impl Borrow<T> + Into<Arc<T>>) -> u32 {
         self.references.fetch_add(1, atomic::Ordering::Relaxed);
 
         let hash = self.hasher.hash_one(value.borrow());
@@ -293,8 +293,8 @@ impl<T: ?Sized + Eq + Hash> Interner<T> {
                 |&i| self.hasher.hash_one(self.vec[i as usize].deref()),
             )
             .or_insert_with(|| {
-                let rc: Rc<T> = value.into();
-                let id = self.vec.push(rc);
+                let arc: Arc<T> = value.into();
+                let id = self.vec.push(arc);
                 assert!(id <= u32::MAX as usize);
                 id as u32
             })
@@ -302,10 +302,10 @@ impl<T: ?Sized + Eq + Hash> Interner<T> {
     }
 
     /// Unconditionally push a value, without validating that it's already interned.
-    fn push(&mut self, value: Rc<T>) -> u32 {
+    fn push(&mut self, value: Arc<T>) -> u32 {
         let hash = self.hasher.hash_one(value.deref());
 
-        let id = self.vec.push_mut(Rc::clone(&value));
+        let id = self.vec.push_mut(Arc::clone(&value));
         assert!(id <= u32::MAX as usize);
         let id = id as u32;
 
@@ -316,8 +316,8 @@ impl<T: ?Sized + Eq + Hash> Interner<T> {
         id
     }
 
-    fn lookup(&self, id: u32) -> Rc<T> {
-        Rc::clone(&self.vec[id as usize])
+    fn lookup(&self, id: u32) -> Arc<T> {
+        Arc::clone(&self.vec[id as usize])
     }
 }
 
@@ -326,14 +326,14 @@ impl<T: ?Sized + Serialize> Serialize for Interner<T> {
     where
         S: Serializer,
     {
-        serializer.collect_seq(self.vec.iter().map(|rc| rc.deref()))
+        serializer.collect_seq(self.vec.iter().map(|arc| arc.deref()))
     }
 }
 
 impl<'de, T> Deserialize<'de> for Interner<T>
 where
     T: ?Sized + Eq + Hash,
-    Rc<T>: Deserialize<'de>,
+    Arc<T>: Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -358,7 +358,7 @@ impl<T: ?Sized> InternerVisitor<T> {
 impl<'de, T> Visitor<'de> for InternerVisitor<T>
 where
     T: ?Sized + Eq + Hash,
-    Rc<T>: Deserialize<'de>,
+    Arc<T>: Deserialize<'de>,
 {
     type Value = Interner<T>;
 
@@ -406,7 +406,7 @@ mod test {
         let key: Box<str> = "Hello".into();
         assert_eq!(interner.intern(key), 0);
 
-        let key: Rc<str> = "world".into();
+        let key: Arc<str> = "world".into();
         assert_eq!(interner.intern(key), 1);
 
         let key: Cow<'_, str> = "Hello world".into();

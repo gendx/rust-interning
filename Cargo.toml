@@ -9,7 +9,7 @@ repository = "https://github.com/gendx/rust-interning"
 readme = "README.md"
 
 [dependencies]
-appendvec = "0.1.0"
+appendvec = "0.1.1"
 bincode = "1.3.3"
 chrono = "0.4.42"
 chrono-tz = "0.10.4"
