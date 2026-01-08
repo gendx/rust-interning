@@ -352,13 +352,13 @@ impl EqWith<source::Data, Interners> for DataSuccess {
     fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
         other.disruptions.as_ref().is_some_and(|other| {
             self.disruptions
-                .lookup(&interners.disruption_set)
+                .lookup_ref(&interners.disruption_set)
                 .set_eq_by(other, |x, y| {
                     x.eq_with_more(y, &interners.disruption, interners)
                 })
         }) && other.lines.as_ref().is_some_and(|other| {
             self.lines
-                .lookup(&interners.line_set)
+                .lookup_ref(&interners.line_set)
                 .set_eq_by(other, |x, y| x.eq_with_more(y, &interners.line, interners))
         }) && other
             .last_updated_date
@@ -616,7 +616,7 @@ impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
             .eq_with_more(other, &interners.object, interners)
             && self
                 .disruption_ids
-                .lookup(&interners.uuid_set)
+                .lookup_ref(&interners.uuid_set)
                 .set_eq_by(&other.disruption_ids, |x, y| x.eq_with(y, &interners.uuid))
     }
 }

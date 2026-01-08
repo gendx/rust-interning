@@ -84,9 +84,16 @@ impl<T: ?Sized + Eq + Hash> Interned<T> {
             _phantom: PhantomData,
         }
     }
+}
 
+impl<T: ?Sized> Interned<T> {
+    #[expect(dead_code)]
     pub fn lookup(&self, interner: &Interner<T>) -> Arc<T> {
         interner.lookup(self.id)
+    }
+
+    pub fn lookup_ref<'a>(&self, interner: &'a Interner<T>) -> &'a T {
+        interner.lookup_ref(self.id)
     }
 }
 
@@ -96,7 +103,7 @@ pub trait EqWith<Rhs: ?Sized, Helper: ?Sized> {
 
 impl<T: ?Sized + Eq + Hash> EqWith<T, Interner<T>> for Interned<T> {
     fn eq_with(&self, other: &T, interner: &Interner<T>) -> bool {
-        self.lookup(interner).deref() == other
+        self.lookup_ref(interner) == other
     }
 }
 
@@ -110,7 +117,7 @@ impl<T: ?Sized + Eq + Hash> Interned<T> {
     where
         T: EqWith<U, Helper>,
     {
-        self.lookup(interner).deref().eq_with(other, helper)
+        self.lookup_ref(interner).eq_with(other, helper)
     }
 }
 
@@ -315,9 +322,15 @@ impl<T: ?Sized + Eq + Hash> Interner<T> {
 
         id
     }
+}
 
+impl<T: ?Sized> Interner<T> {
     fn lookup(&self, id: u32) -> Arc<T> {
         Arc::clone(&self.vec[id as usize])
+    }
+
+    fn lookup_ref(&self, id: u32) -> &T {
+        self.vec[id as usize].deref()
     }
 }
 
