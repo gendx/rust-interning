@@ -1,4 +1,6 @@
 use std::mem::size_of;
+use std::ops::Deref;
+use std::sync::Arc;
 use uuid::Uuid;
 
 pub trait StackSize {
@@ -64,5 +66,11 @@ impl<T: EstimateSize> EstimateSize for Vec<T> {
 impl<T: EstimateSize> EstimateSize for Box<[T]> {
     fn allocated_bytes(&self) -> usize {
         self.iter().map(|x| x.estimated_bytes()).sum()
+    }
+}
+
+impl<T: ?Sized + EstimateSize> EstimateSize for Arc<T> {
+    fn allocated_bytes(&self) -> usize {
+        self.deref().estimated_bytes() + 2 * size_of::<usize>()
     }
 }
