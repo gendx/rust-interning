@@ -11,12 +11,11 @@ use std::hash::{BuildHasher, Hash, Hasher};
 use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::atomic::{self, AtomicUsize};
-use std::sync::Arc;
 
-pub type IString = Interned<str>;
-pub type StringInterner = Interner<str>;
+pub type IString = Interned<str, Box<str>>;
+pub type StringInterner = Interner<str, Box<str>>;
 
-pub struct Interned<T: ?Sized, Storage = Arc<T>> {
+pub struct Interned<T: ?Sized, Storage = T> {
     id: u32,
     _phantom: PhantomData<fn() -> (*const T, *const Storage)>,
 }
@@ -238,7 +237,7 @@ impl Visitor<'_> for U32Visitor {
     }
 }
 
-pub struct Interner<T: ?Sized, Storage = Arc<T>> {
+pub struct Interner<T: ?Sized, Storage = T> {
     vec: AppendVec<Storage>,
     map: DashTable<u32>,
     hasher: DefaultHashBuilder,
@@ -470,7 +469,7 @@ mod test {
 
     #[test]
     fn test_str_interner() {
-        let interner: Interner<str> = Interner::default();
+        let interner: Interner<str, Box<str>> = Interner::default();
 
         let key: &str = "Hello";
         assert_eq!(interner.intern(key), 0);
@@ -481,7 +480,7 @@ mod test {
         let key: Box<str> = "Hello".into();
         assert_eq!(interner.intern(key), 0);
 
-        let key: Arc<str> = "world".into();
+        let key: Box<str> = "world".into();
         assert_eq!(interner.intern(key), 1);
 
         let key: Cow<'_, str> = "Hello world".into();

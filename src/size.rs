@@ -69,6 +69,12 @@ impl<T: EstimateSize> EstimateSize for Box<[T]> {
     }
 }
 
+impl<T: ?Sized + EstimateSize> EstimateSize for Box<T> {
+    fn allocated_bytes(&self) -> usize {
+        self.deref().estimated_bytes()
+    }
+}
+
 impl<T: ?Sized + EstimateSize> EstimateSize for Arc<T> {
     fn allocated_bytes(&self) -> usize {
         self.deref().estimated_bytes() + 2 * size_of::<usize>()

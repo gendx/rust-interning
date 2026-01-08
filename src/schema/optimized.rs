@@ -98,29 +98,29 @@ fn set_eq_by<T, U>(lhs: &[T], rhs: &[U], pred: impl Fn(&T, &U) -> bool) -> bool 
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
-pub struct InternedSet<T: ?Sized> {
-    set: Box<[Interned<T>]>,
+pub struct InternedSet<T: ?Sized, Storage = T> {
+    set: Box<[Interned<T, Storage>]>,
 }
 
-impl<T: ?Sized> EstimateSize for InternedSet<T> {
+impl<T: ?Sized, Storage> EstimateSize for InternedSet<T, Storage> {
     fn allocated_bytes(&self) -> usize {
         self.set.allocated_bytes()
     }
 }
 
-impl<T: ?Sized> InternedSet<T> {
-    fn new(set: impl IntoIterator<Item = Interned<T>>) -> Self {
+impl<T: ?Sized, Storage> InternedSet<T, Storage> {
+    fn new(set: impl IntoIterator<Item = Interned<T, Storage>>) -> Self {
         let mut set: Box<[_]> = set.into_iter().collect();
         set.sort_unstable();
         Self { set }
     }
 
-    fn set_eq_by<U>(&self, rhs: &[U], pred: impl Fn(&Interned<T>, &U) -> bool) -> bool {
+    fn set_eq_by<U>(&self, rhs: &[U], pred: impl Fn(&Interned<T, Storage>, &U) -> bool) -> bool {
         set_eq_by(&self.set, rhs, pred)
     }
 }
 
-impl<T: ?Sized> Serialize for InternedSet<T> {
+impl<T: ?Sized, Storage> Serialize for InternedSet<T, Storage> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -151,7 +151,7 @@ impl<T: ?Sized> Serialize for InternedSet<T> {
     }
 }
 
-impl<'de, T: ?Sized> Deserialize<'de> for InternedSet<T> {
+impl<'de, T: ?Sized, Storage> Deserialize<'de> for InternedSet<T, Storage> {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
@@ -160,11 +160,11 @@ impl<'de, T: ?Sized> Deserialize<'de> for InternedSet<T> {
     }
 }
 
-struct InternedSetVisitor<T: ?Sized> {
-    _phantom: PhantomData<fn() -> InternedSet<T>>,
+struct InternedSetVisitor<T: ?Sized, Storage> {
+    _phantom: PhantomData<fn() -> InternedSet<T, Storage>>,
 }
 
-impl<T: ?Sized> InternedSetVisitor<T> {
+impl<T: ?Sized, Storage> InternedSetVisitor<T, Storage> {
     fn new() -> Self {
         Self {
             _phantom: PhantomData,
@@ -172,8 +172,8 @@ impl<T: ?Sized> InternedSetVisitor<T> {
     }
 }
 
-impl<'de, T: ?Sized> Visitor<'de> for InternedSetVisitor<T> {
-    type Value = InternedSet<T>;
+impl<'de, T: ?Sized, Storage> Visitor<'de> for InternedSetVisitor<T, Storage> {
+    type Value = InternedSet<T, Storage>;
 
     fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
         formatter.write_str("a sequence of values")
@@ -412,7 +412,7 @@ pub struct Disruption {
     pub last_update: TimestampSecondsParis,
     pub cause: IString,
     pub severity: IString,
-    pub tags: Option<InternedSet<str>>,
+    pub tags: Option<InternedSet<str, Box<str>>>,
     pub title: IString,
     pub message: Option<IString>,
     pub short_message: Option<IString>,
