@@ -403,9 +403,9 @@ where
     }
 }
 
-impl<'de, T, Storage> Deserialize<'de> for Interner<T, Storage>
+impl<'de, T: ?Sized, Storage> Deserialize<'de> for Interner<T, Storage>
 where
-    T: ?Sized + Eq + Hash,
+    T: Eq + Hash,
     Storage: Borrow<T> + Deserialize<'de>,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -428,9 +428,9 @@ impl<T: ?Sized, Storage> InternerVisitor<T, Storage> {
     }
 }
 
-impl<'de, T, Storage> Visitor<'de> for InternerVisitor<T, Storage>
+impl<'de, T: ?Sized, Storage> Visitor<'de> for InternerVisitor<T, Storage>
 where
-    T: ?Sized + Eq + Hash,
+    T: Eq + Hash,
     Storage: Borrow<T> + Deserialize<'de>,
 {
     type Value = Interner<T, Storage>;
