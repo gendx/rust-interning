@@ -5,7 +5,7 @@ mod schema;
 mod size;
 
 use intern::EqWith;
-use rayon::prelude::*;
+use paralight::prelude::*;
 use schema::optimized::Interners;
 use serde::{Deserialize, Serialize};
 use size::EstimateSize;
@@ -36,11 +36,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let interners = Interners::default();
     let datas = Mutex::new(Vec::new());
 
+    let thread_pool = RayonThreadPool::new_global(
+        ThreadCount::try_from(rayon_core::current_num_threads())
+            .expect("Paralight cannot operate with 0 threads"),
+        RangeStrategy::WorkStealing,
+    );
+
     args.next(); // Ignoring the program path.
     let output_dir: PathBuf = args.next().unwrap().into();
     for directory in args {
         eprintln!("Visiting directory: {directory:?}");
-        visit_dirs(&directory, &|file_path| {
+        visit_dirs(&thread_pool, &directory, &|file_path| {
             let mut file = File::open(file_path)?;
             let mut data = Vec::new();
             file.read_to_end(&mut data)?;
@@ -161,6 +167,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn visit_dirs(
+    thread_pool: &RayonThreadPool,
     dir: impl AsRef<Path> + Debug,
     callback: &(impl Fn(&Path) -> std::io::Result<()> + Sync),
 ) -> std::io::Result<()> {
@@ -171,6 +178,7 @@ fn visit_dirs(
     entries.sort_unstable_by_key(|x| x.path());
     entries
         .par_iter()
+        .with_thread_pool(thread_pool)
         .try_for_each(|entry| -> std::io::Result<()> {
             let mut path = entry.path();
             let mut file_type = entry.file_type()?;
@@ -184,7 +192,7 @@ fn visit_dirs(
             }
 
             if file_type.is_dir() {
-                visit_dirs(path, callback)?;
+                visit_dirs(thread_pool, path, callback)?;
             } else if file_type.is_file() {
                 callback(&path)?;
             } else {
