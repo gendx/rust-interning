@@ -1,10 +1,11 @@
 #![feature(exit_status_error, iter_order_by)]
 
+mod compare;
 mod intern;
 mod schema;
 mod size;
 
-use intern::EqWith;
+use compare::EqWith;
 use paralight::prelude::*;
 use schema::optimized::Interners;
 use serde::{Deserialize, Serialize};

@@ -107,38 +107,6 @@ where
     }
 }
 
-pub trait EqWith<Rhs: ?Sized, Helper: ?Sized> {
-    fn eq_with(&self, other: &Rhs, helper: &Helper) -> bool;
-}
-
-impl<T: ?Sized, Storage> EqWith<T, Interner<T, Storage>> for Interned<T, Storage>
-where
-    T: Eq + Hash,
-    Storage: Borrow<T>,
-{
-    fn eq_with(&self, other: &T, interner: &Interner<T, Storage>) -> bool {
-        self.lookup_ref(interner) == other
-    }
-}
-
-impl<T: ?Sized, Storage> Interned<T, Storage>
-where
-    T: Eq + Hash,
-    Storage: Borrow<T>,
-{
-    pub fn eq_with_more<U, Helper>(
-        &self,
-        other: &U,
-        interner: &Interner<T, Storage>,
-        helper: &Helper,
-    ) -> bool
-    where
-        T: EqWith<U, Helper>,
-    {
-        self.lookup_ref(interner).eq_with(other, helper)
-    }
-}
-
 impl<T: ?Sized, Storage> Serialize for Interned<T, Storage> {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

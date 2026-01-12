@@ -1,5 +1,6 @@
 use super::source;
-use crate::intern::{EqWith, IString, Interned, Interner, StringInterner};
+use crate::compare::EqWith;
+use crate::intern::{IString, Interned, Interner, StringInterner};
 use crate::size::EstimateSize;
 use chrono::format::SecondsFormat;
 use chrono::offset::LocalResult;
@@ -354,12 +355,14 @@ impl EqWith<source::Data, Interners> for DataSuccess {
             self.disruptions
                 .lookup_ref(&interners.disruption_set)
                 .set_eq_by(other, |x, y| {
-                    x.eq_with_more(y, &interners.disruption, interners)
+                    x.lookup_ref(&interners.disruption).eq_with(y, interners)
                 })
         }) && other.lines.as_ref().is_some_and(|other| {
             self.lines
                 .lookup_ref(&interners.line_set)
-                .set_eq_by(other, |x, y| x.eq_with_more(y, &interners.line, interners))
+                .set_eq_by(other, |x, y| {
+                    x.lookup_ref(&interners.line).eq_with(y, interners)
+                })
         }) && other
             .last_updated_date
             .as_ref()
@@ -440,7 +443,8 @@ impl EqWith<source::Disruption, Interners> for Disruption {
             && self
                 .application_periods
                 .set_eq_by(&other.application_periods, |x, y| {
-                    x.eq_with_more(y, &interners.application_period, interners)
+                    x.lookup_ref(&interners.application_period)
+                        .eq_with(y, interners)
                 })
             && self.last_update.to_formatted("%Y%m%dT%H%M%S") == other.last_update
             && self.cause.eq_with(&other.cause, &interners.string)
@@ -535,11 +539,13 @@ impl EstimateSize for Line {
 impl EqWith<source::Line, Interners> for Line {
     fn eq_with(&self, other: &source::Line, interners: &Interners) -> bool {
         self.header
-            .eq_with_more(other, &interners.line_header, interners)
+            .lookup_ref(&interners.line_header)
+            .eq_with(other, interners)
             && self
                 .impacted_objects
                 .set_eq_by(&other.impacted_objects, |x, y| {
-                    x.eq_with_more(y, &interners.impacted_object, interners)
+                    x.lookup_ref(&interners.impacted_object)
+                        .eq_with(y, interners)
                 })
     }
 }
@@ -613,7 +619,8 @@ impl EstimateSize for ImpactedObject {
 impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
     fn eq_with(&self, other: &source::ImpactedObject, interners: &Interners) -> bool {
         self.object
-            .eq_with_more(other, &interners.object, interners)
+            .lookup_ref(&interners.object)
+            .eq_with(other, interners)
             && self
                 .disruption_ids
                 .lookup_ref(&interners.uuid_set)
