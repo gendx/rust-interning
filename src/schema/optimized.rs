@@ -1,19 +1,19 @@
 use super::source;
+use super::Uuid;
 use crate::compare::EqWith;
 use crate::intern::{IString, Interned, Interner, StringInterner};
-use crate::size::EstimateSize;
 use chrono::format::SecondsFormat;
 use chrono::offset::LocalResult;
 use chrono::{DateTime, NaiveDateTime};
 use chrono_tz::Europe::Paris;
+use get_size2::{GetSize, GetSizeTracker};
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use uuid::Uuid;
 
-#[derive(Default, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Default, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct Interners {
     string: StringInterner,
     uuid: Interner<Uuid>,
@@ -26,22 +26,6 @@ pub struct Interners {
     impacted_object: Interner<ImpactedObject>,
     object: Interner<Object>,
     uuid_set: Interner<InternedSet<Uuid>>,
-}
-
-impl EstimateSize for Interners {
-    fn allocated_bytes(&self) -> usize {
-        self.string.allocated_bytes()
-            + self.uuid.allocated_bytes()
-            + self.disruption_set.allocated_bytes()
-            + self.disruption.allocated_bytes()
-            + self.application_period.allocated_bytes()
-            + self.line_set.allocated_bytes()
-            + self.line.allocated_bytes()
-            + self.line_header.allocated_bytes()
-            + self.impacted_object.allocated_bytes()
-            + self.object.allocated_bytes()
-            + self.uuid_set.allocated_bytes()
-    }
 }
 
 impl Interners {
@@ -103,9 +87,9 @@ pub struct InternedSet<T: ?Sized, Storage = T> {
     set: Box<[Interned<T, Storage>]>,
 }
 
-impl<T: ?Sized, Storage> EstimateSize for InternedSet<T, Storage> {
-    fn allocated_bytes(&self) -> usize {
-        self.set.allocated_bytes()
+impl<T: ?Sized, Storage> GetSize for InternedSet<T, Storage> {
+    fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.set.get_heap_size_with_tracker(tracker)
     }
 }
 
@@ -208,14 +192,8 @@ impl<'de, T: ?Sized, Storage> Visitor<'de> for InternedSetVisitor<T, Storage> {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, GetSize)]
 pub struct TimestampSecondsParis(i64);
-
-impl EstimateSize for TimestampSecondsParis {
-    fn allocated_bytes(&self) -> usize {
-        0
-    }
-}
 
 impl TimestampSecondsParis {
     fn from_formatted(x: &str, format: &str) -> Self {
@@ -245,14 +223,8 @@ impl TimestampSecondsParis {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, GetSize)]
 pub struct TimestampMillis(i64);
-
-impl EstimateSize for TimestampMillis {
-    fn allocated_bytes(&self) -> usize {
-        0
-    }
-}
 
 impl TimestampMillis {
     fn from_rfc3339(x: &str) -> Self {
@@ -268,19 +240,10 @@ impl TimestampMillis {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, GetSize)]
 pub enum Data {
     Success(DataSuccess),
     Error(DataError),
-}
-
-impl EstimateSize for Data {
-    fn allocated_bytes(&self) -> usize {
-        match self {
-            Data::Success(data) => data.allocated_bytes(),
-            Data::Error(data) => data.allocated_bytes(),
-        }
-    }
 }
 
 impl EqWith<source::Data, Interners> for Data {
@@ -334,19 +297,11 @@ impl Data {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct DataSuccess {
     disruptions: Interned<InternedSet<Disruption>>,
     lines: Interned<InternedSet<Line>>,
     last_updated_date: TimestampMillis,
-}
-
-impl EstimateSize for DataSuccess {
-    fn allocated_bytes(&self) -> usize {
-        self.disruptions.allocated_bytes()
-            + self.lines.allocated_bytes()
-            + self.last_updated_date.allocated_bytes()
-    }
 }
 
 impl EqWith<source::Data, Interners> for DataSuccess {
@@ -373,19 +328,11 @@ impl EqWith<source::Data, Interners> for DataSuccess {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct DataError {
     status_code: i32,
     error: IString,
     message: IString,
-}
-
-impl EstimateSize for DataError {
-    fn allocated_bytes(&self) -> usize {
-        self.status_code.allocated_bytes()
-            + self.error.allocated_bytes()
-            + self.message.allocated_bytes()
-    }
 }
 
 impl EqWith<source::Data, Interners> for DataError {
@@ -408,7 +355,7 @@ impl EqWith<source::Data, Interners> for DataError {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct Disruption {
     pub id: Interned<Uuid>,
     pub application_periods: InternedSet<ApplicationPeriod>,
@@ -420,21 +367,6 @@ pub struct Disruption {
     pub message: Option<IString>,
     pub short_message: Option<IString>,
     pub disruption_id: Option<Interned<Uuid>>,
-}
-
-impl EstimateSize for Disruption {
-    fn allocated_bytes(&self) -> usize {
-        self.id.allocated_bytes()
-            + self.application_periods.allocated_bytes()
-            + self.last_update.allocated_bytes()
-            + self.cause.allocated_bytes()
-            + self.severity.allocated_bytes()
-            + self.tags.allocated_bytes()
-            + self.title.allocated_bytes()
-            + self.message.allocated_bytes()
-            + self.short_message.allocated_bytes()
-            + self.disruption_id.allocated_bytes()
-    }
 }
 
 impl EqWith<source::Disruption, Interners> for Disruption {
@@ -496,16 +428,10 @@ impl Disruption {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct ApplicationPeriod {
     pub begin: TimestampSecondsParis,
     pub end: TimestampSecondsParis,
-}
-
-impl EstimateSize for ApplicationPeriod {
-    fn allocated_bytes(&self) -> usize {
-        self.begin.allocated_bytes() + self.end.allocated_bytes()
-    }
 }
 
 impl EqWith<source::ApplicationPeriod, Interners> for ApplicationPeriod {
@@ -524,16 +450,10 @@ impl ApplicationPeriod {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct Line {
     pub header: Interned<LineHeader>,
     pub impacted_objects: InternedSet<ImpactedObject>,
-}
-
-impl EstimateSize for Line {
-    fn allocated_bytes(&self) -> usize {
-        self.header.allocated_bytes() + self.impacted_objects.allocated_bytes()
-    }
 }
 
 impl EqWith<source::Line, Interners> for Line {
@@ -571,23 +491,13 @@ impl Line {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct LineHeader {
     pub id: IString,
     pub name: IString,
     pub short_name: IString,
     pub mode: IString,
     pub network_id: IString,
-}
-
-impl EstimateSize for LineHeader {
-    fn allocated_bytes(&self) -> usize {
-        self.id.allocated_bytes()
-            + self.name.allocated_bytes()
-            + self.short_name.allocated_bytes()
-            + self.mode.allocated_bytes()
-            + self.network_id.allocated_bytes()
-    }
 }
 
 impl EqWith<source::Line, Interners> for LineHeader {
@@ -604,16 +514,10 @@ impl EqWith<source::Line, Interners> for LineHeader {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct ImpactedObject {
     pub object: Interned<Object>,
     pub disruption_ids: Interned<InternedSet<Uuid>>,
-}
-
-impl EstimateSize for ImpactedObject {
-    fn allocated_bytes(&self) -> usize {
-        self.object.allocated_bytes() + self.disruption_ids.allocated_bytes()
-    }
 }
 
 impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
@@ -650,17 +554,11 @@ impl ImpactedObject {
     }
 }
 
-#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple)]
+#[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct Object {
     pub typ: IString,
     pub id: IString,
     pub name: IString,
-}
-
-impl EstimateSize for Object {
-    fn allocated_bytes(&self) -> usize {
-        self.typ.allocated_bytes() + self.id.allocated_bytes() + self.name.allocated_bytes()
-    }
 }
 
 impl EqWith<source::ImpactedObject, Interners> for Object {

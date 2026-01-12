@@ -1,6 +1,6 @@
-use crate::size::EstimateSize;
 use appendvec::AppendVec;
 use dashtable::DashTable;
+use get_size2::{GetSize, GetSizeTracker};
 use hashbrown::DefaultHashBuilder;
 use serde::de::{SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -55,10 +55,8 @@ impl<T: ?Sized, Storage> Hash for Interned<T, Storage> {
     }
 }
 
-impl<T: ?Sized, Storage> EstimateSize for Interned<T, Storage> {
-    fn allocated_bytes(&self) -> usize {
-        0
-    }
+impl<T: ?Sized, Storage> GetSize for Interned<T, Storage> {
+    // There is nothing on the heap, so the default implementation works out of the box.
 }
 
 impl<T: ?Sized, Storage> Interned<T, Storage> {
@@ -257,24 +255,25 @@ where
 {
 }
 
-impl<T: ?Sized, Storage> EstimateSize for Interner<T, Storage>
+impl<T: ?Sized, Storage> GetSize for Interner<T, Storage>
 where
-    Storage: EstimateSize,
+    Storage: GetSize,
 {
-    fn allocated_bytes(&self) -> usize {
-        self.vec.iter().map(|x| x.estimated_bytes()).sum::<usize>()
-            + self.vec.len() * size_of::<u32>()
+    fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        let heap_size = self.vec.iter().map(|x| x.get_size()).sum::<usize>()
+            + self.vec.len() * size_of::<u32>();
+        (heap_size, tracker)
     }
 }
 
 impl<T: ?Sized, Storage> Interner<T, Storage>
 where
-    Storage: EstimateSize,
+    Storage: GetSize,
 {
     pub fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
         let len = self.len();
         let references = self.references();
-        let estimated_bytes = self.estimated_bytes();
+        let estimated_bytes = self.get_size();
         println!(
             "{}- [{:.02}%] {} interner: {} objects | {} bytes ({:.02} bytes/object) | {} references ({:.02} refs/object)",
             prefix,
