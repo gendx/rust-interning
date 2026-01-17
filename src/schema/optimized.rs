@@ -1,7 +1,7 @@
 use super::source;
 use super::Uuid;
 use crate::compare::EqWith;
-use crate::intern::{IString, Interned, Interner, StringInterner};
+use blazinterner::{Arena, Interned};
 use chrono::format::SecondsFormat;
 use chrono::offset::LocalResult;
 use chrono::{DateTime, NaiveDateTime};
@@ -13,22 +13,25 @@ use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
+type StringArena = Arena<str, Box<str>>;
+type IString = Interned<str, Box<str>>;
+
 #[derive(Default, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
-pub struct Interners {
-    string: StringInterner,
-    uuid: Interner<Uuid>,
-    disruption_set: Interner<InternedSet<Disruption>>,
-    disruption: Interner<Disruption>,
-    application_period: Interner<ApplicationPeriod>,
-    line_set: Interner<InternedSet<Line>>,
-    line: Interner<Line>,
-    line_header: Interner<LineHeader>,
-    impacted_object: Interner<ImpactedObject>,
-    object: Interner<Object>,
-    uuid_set: Interner<InternedSet<Uuid>>,
+pub struct Arenas {
+    string: StringArena,
+    uuid: Arena<Uuid>,
+    disruption_set: Arena<InternedSet<Disruption>>,
+    disruption: Arena<Disruption>,
+    application_period: Arena<ApplicationPeriod>,
+    line_set: Arena<InternedSet<Line>>,
+    line: Arena<Line>,
+    line_header: Arena<LineHeader>,
+    impacted_object: Arena<ImpactedObject>,
+    object: Arena<Object>,
+    uuid_set: Arena<InternedSet<Uuid>>,
 }
 
-impl Interners {
+impl Arenas {
     pub fn print_summary(&self, total_bytes: usize) {
         self.string.print_summary("", "String", total_bytes);
         self.uuid.print_summary("", "Uuid", total_bytes);
@@ -246,17 +249,17 @@ pub enum Data {
     Error(DataError),
 }
 
-impl EqWith<source::Data, Interners> for Data {
-    fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
+impl EqWith<source::Data, Arenas> for Data {
+    fn eq_with(&self, other: &source::Data, arenas: &Arenas) -> bool {
         match self {
-            Data::Success(data) => data.eq_with(other, interners),
-            Data::Error(data) => data.eq_with(other, interners),
+            Data::Success(data) => data.eq_with(other, arenas),
+            Data::Error(data) => data.eq_with(other, arenas),
         }
     }
 }
 
 impl Data {
-    pub fn from(interners: &Interners, source: source::Data) -> Self {
+    pub fn from(arenas: &Arenas, source: source::Data) -> Self {
         match source {
             source::Data {
                 disruptions: Some(disruptions),
@@ -267,16 +270,16 @@ impl Data {
                 message: None,
             } => {
                 let disruptions = InternedSet::new(disruptions.into_iter().map(|x| {
-                    let disruption = Disruption::from(interners, x);
-                    Interned::from(&interners.disruption, disruption)
+                    let disruption = Disruption::from(arenas, x);
+                    Interned::from(&arenas.disruption, disruption)
                 }));
                 let lines = InternedSet::new(lines.into_iter().map(|x| {
-                    let line = Line::from(interners, x);
-                    Interned::from(&interners.line, line)
+                    let line = Line::from(arenas, x);
+                    Interned::from(&arenas.line, line)
                 }));
                 Data::Success(DataSuccess {
-                    disruptions: Interned::from(&interners.disruption_set, disruptions),
-                    lines: Interned::from(&interners.line_set, lines),
+                    disruptions: Interned::from(&arenas.disruption_set, disruptions),
+                    lines: Interned::from(&arenas.line_set, lines),
                     last_updated_date: TimestampMillis::from_rfc3339(&last_updated_date),
                 })
             }
@@ -289,8 +292,8 @@ impl Data {
                 message: Some(message),
             } => Data::Error(DataError {
                 status_code,
-                error: Interned::from(&interners.string, error),
-                message: Interned::from(&interners.string, message),
+                error: Interned::from(&arenas.string, error),
+                message: Interned::from(&arenas.string, message),
             }),
             _ => panic!("Invalid data: {source:?}"),
         }
@@ -304,20 +307,18 @@ pub struct DataSuccess {
     last_updated_date: TimestampMillis,
 }
 
-impl EqWith<source::Data, Interners> for DataSuccess {
-    fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
+impl EqWith<source::Data, Arenas> for DataSuccess {
+    fn eq_with(&self, other: &source::Data, arenas: &Arenas) -> bool {
         other.disruptions.as_ref().is_some_and(|other| {
             self.disruptions
-                .lookup_ref(&interners.disruption_set)
+                .lookup_ref(&arenas.disruption_set)
                 .set_eq_by(other, |x, y| {
-                    x.lookup_ref(&interners.disruption).eq_with(y, interners)
+                    x.lookup_ref(&arenas.disruption).eq_with(y, arenas)
                 })
         }) && other.lines.as_ref().is_some_and(|other| {
             self.lines
-                .lookup_ref(&interners.line_set)
-                .set_eq_by(other, |x, y| {
-                    x.lookup_ref(&interners.line).eq_with(y, interners)
-                })
+                .lookup_ref(&arenas.line_set)
+                .set_eq_by(other, |x, y| x.lookup_ref(&arenas.line).eq_with(y, arenas))
         }) && other
             .last_updated_date
             .as_ref()
@@ -335,8 +336,8 @@ pub struct DataError {
     message: IString,
 }
 
-impl EqWith<source::Data, Interners> for DataError {
-    fn eq_with(&self, other: &source::Data, interners: &Interners) -> bool {
+impl EqWith<source::Data, Arenas> for DataError {
+    fn eq_with(&self, other: &source::Data, arenas: &Arenas) -> bool {
         other
             .status_code
             .as_ref()
@@ -344,11 +345,11 @@ impl EqWith<source::Data, Interners> for DataError {
             && other
                 .error
                 .as_ref()
-                .is_some_and(|other| self.error.eq_with(other, &interners.string))
+                .is_some_and(|other| self.error.eq_with(other, &arenas.string))
             && other
                 .message
                 .as_ref()
-                .is_some_and(|other| self.message.eq_with(other, &interners.string))
+                .is_some_and(|other| self.message.eq_with(other, &arenas.string))
             && other.disruptions.is_none()
             && other.lines.is_none()
             && other.last_updated_date.is_none()
@@ -369,61 +370,60 @@ pub struct Disruption {
     pub disruption_id: Option<Interned<Uuid>>,
 }
 
-impl EqWith<source::Disruption, Interners> for Disruption {
-    fn eq_with(&self, other: &source::Disruption, interners: &Interners) -> bool {
-        self.id.eq_with(&other.id, &interners.uuid)
+impl EqWith<source::Disruption, Arenas> for Disruption {
+    fn eq_with(&self, other: &source::Disruption, arenas: &Arenas) -> bool {
+        self.id.eq_with(&other.id, &arenas.uuid)
             && self
                 .application_periods
                 .set_eq_by(&other.application_periods, |x, y| {
-                    x.lookup_ref(&interners.application_period)
-                        .eq_with(y, interners)
+                    x.lookup_ref(&arenas.application_period).eq_with(y, arenas)
                 })
             && self.last_update.to_formatted("%Y%m%dT%H%M%S") == other.last_update
-            && self.cause.eq_with(&other.cause, &interners.string)
-            && self.severity.eq_with(&other.severity, &interners.string)
+            && self.cause.eq_with(&other.cause, &arenas.string)
+            && self.severity.eq_with(&other.severity, &arenas.string)
             && option_eq_by(&self.tags, &other.tags, |x, y| {
-                x.set_eq_by(y, |x, y| x.eq_with(y, &interners.string))
+                x.set_eq_by(y, |x, y| x.eq_with(y, &arenas.string))
             })
-            && self.title.eq_with(&other.title, &interners.string)
+            && self.title.eq_with(&other.title, &arenas.string)
             && option_eq_by(&self.message, &other.message, |x, y| {
-                x.eq_with(y, &interners.string)
+                x.eq_with(y, &arenas.string)
             })
             && option_eq_by(&self.short_message, &other.short_message, |x, y| {
-                x.eq_with(y, &interners.string)
+                x.eq_with(y, &arenas.string)
             })
             && option_eq_by(&self.disruption_id, &other.disruption_id, |x, y| {
-                x.eq_with(y, &interners.uuid)
+                x.eq_with(y, &arenas.uuid)
             })
     }
 }
 
 impl Disruption {
-    pub fn from(interners: &Interners, source: source::Disruption) -> Self {
+    pub fn from(arenas: &Arenas, source: source::Disruption) -> Self {
         Self {
-            id: Interned::from(&interners.uuid, source.id),
+            id: Interned::from(&arenas.uuid, source.id),
             application_periods: InternedSet::new(source.application_periods.into_iter().map(
                 |x| {
-                    let application_period = ApplicationPeriod::from(interners, x);
-                    Interned::from(&interners.application_period, application_period)
+                    let application_period = ApplicationPeriod::from(arenas, x);
+                    Interned::from(&arenas.application_period, application_period)
                 },
             )),
             last_update: TimestampSecondsParis::from_formatted(
                 &source.last_update,
                 "%Y%m%dT%H%M%S",
             ),
-            cause: Interned::from(&interners.string, source.cause),
-            severity: Interned::from(&interners.string, source.severity),
+            cause: Interned::from(&arenas.string, source.cause),
+            severity: Interned::from(&arenas.string, source.severity),
             tags: source.tags.map(|x| {
-                InternedSet::new(x.into_iter().map(|x| Interned::from(&interners.string, x)))
+                InternedSet::new(x.into_iter().map(|x| Interned::from(&arenas.string, x)))
             }),
-            title: Interned::from(&interners.string, source.title),
-            message: source.message.map(|x| Interned::from(&interners.string, x)),
+            title: Interned::from(&arenas.string, source.title),
+            message: source.message.map(|x| Interned::from(&arenas.string, x)),
             short_message: source
                 .short_message
-                .map(|x| Interned::from(&interners.string, x)),
+                .map(|x| Interned::from(&arenas.string, x)),
             disruption_id: source
                 .disruption_id
-                .map(|x| Interned::from(&interners.uuid, x)),
+                .map(|x| Interned::from(&arenas.uuid, x)),
         }
     }
 }
@@ -434,15 +434,15 @@ pub struct ApplicationPeriod {
     pub end: TimestampSecondsParis,
 }
 
-impl EqWith<source::ApplicationPeriod, Interners> for ApplicationPeriod {
-    fn eq_with(&self, other: &source::ApplicationPeriod, _interners: &Interners) -> bool {
+impl EqWith<source::ApplicationPeriod, Arenas> for ApplicationPeriod {
+    fn eq_with(&self, other: &source::ApplicationPeriod, _arenas: &Arenas) -> bool {
         self.begin.to_formatted("%Y%m%dT%H%M%S") == other.begin
             && self.end.to_formatted("%Y%m%dT%H%M%S") == other.end
     }
 }
 
 impl ApplicationPeriod {
-    pub fn from(_interners: &Interners, source: source::ApplicationPeriod) -> Self {
+    pub fn from(_arenas: &Arenas, source: source::ApplicationPeriod) -> Self {
         Self {
             begin: TimestampSecondsParis::from_formatted(&source.begin, "%Y%m%dT%H%M%S"),
             end: TimestampSecondsParis::from_formatted(&source.end, "%Y%m%dT%H%M%S"),
@@ -456,36 +456,35 @@ pub struct Line {
     pub impacted_objects: InternedSet<ImpactedObject>,
 }
 
-impl EqWith<source::Line, Interners> for Line {
-    fn eq_with(&self, other: &source::Line, interners: &Interners) -> bool {
+impl EqWith<source::Line, Arenas> for Line {
+    fn eq_with(&self, other: &source::Line, arenas: &Arenas) -> bool {
         self.header
-            .lookup_ref(&interners.line_header)
-            .eq_with(other, interners)
+            .lookup_ref(&arenas.line_header)
+            .eq_with(other, arenas)
             && self
                 .impacted_objects
                 .set_eq_by(&other.impacted_objects, |x, y| {
-                    x.lookup_ref(&interners.impacted_object)
-                        .eq_with(y, interners)
+                    x.lookup_ref(&arenas.impacted_object).eq_with(y, arenas)
                 })
     }
 }
 
 impl Line {
-    pub fn from(interners: &Interners, source: source::Line) -> Self {
+    pub fn from(arenas: &Arenas, source: source::Line) -> Self {
         Self {
             header: Interned::from(
-                &interners.line_header,
+                &arenas.line_header,
                 LineHeader {
-                    id: Interned::from(&interners.string, source.id),
-                    name: Interned::from(&interners.string, source.name),
-                    short_name: Interned::from(&interners.string, source.short_name),
-                    mode: Interned::from(&interners.string, source.mode),
-                    network_id: Interned::from(&interners.string, source.network_id),
+                    id: Interned::from(&arenas.string, source.id),
+                    name: Interned::from(&arenas.string, source.name),
+                    short_name: Interned::from(&arenas.string, source.short_name),
+                    mode: Interned::from(&arenas.string, source.mode),
+                    network_id: Interned::from(&arenas.string, source.network_id),
                 },
             ),
             impacted_objects: InternedSet::new(source.impacted_objects.into_iter().map(|x| {
-                let impacted_object = ImpactedObject::from(interners, x);
-                Interned::from(&interners.impacted_object, impacted_object)
+                let impacted_object = ImpactedObject::from(arenas, x);
+                Interned::from(&arenas.impacted_object, impacted_object)
             })),
         }
     }
@@ -500,17 +499,13 @@ pub struct LineHeader {
     pub network_id: IString,
 }
 
-impl EqWith<source::Line, Interners> for LineHeader {
-    fn eq_with(&self, other: &source::Line, interners: &Interners) -> bool {
-        self.id.eq_with(&other.id, &interners.string)
-            && self.name.eq_with(&other.name, &interners.string)
-            && self
-                .short_name
-                .eq_with(&other.short_name, &interners.string)
-            && self.mode.eq_with(&other.mode, &interners.string)
-            && self
-                .network_id
-                .eq_with(&other.network_id, &interners.string)
+impl EqWith<source::Line, Arenas> for LineHeader {
+    fn eq_with(&self, other: &source::Line, arenas: &Arenas) -> bool {
+        self.id.eq_with(&other.id, &arenas.string)
+            && self.name.eq_with(&other.name, &arenas.string)
+            && self.short_name.eq_with(&other.short_name, &arenas.string)
+            && self.mode.eq_with(&other.mode, &arenas.string)
+            && self.network_id.eq_with(&other.network_id, &arenas.string)
     }
 }
 
@@ -520,36 +515,36 @@ pub struct ImpactedObject {
     pub disruption_ids: Interned<InternedSet<Uuid>>,
 }
 
-impl EqWith<source::ImpactedObject, Interners> for ImpactedObject {
-    fn eq_with(&self, other: &source::ImpactedObject, interners: &Interners) -> bool {
+impl EqWith<source::ImpactedObject, Arenas> for ImpactedObject {
+    fn eq_with(&self, other: &source::ImpactedObject, arenas: &Arenas) -> bool {
         self.object
-            .lookup_ref(&interners.object)
-            .eq_with(other, interners)
+            .lookup_ref(&arenas.object)
+            .eq_with(other, arenas)
             && self
                 .disruption_ids
-                .lookup_ref(&interners.uuid_set)
-                .set_eq_by(&other.disruption_ids, |x, y| x.eq_with(y, &interners.uuid))
+                .lookup_ref(&arenas.uuid_set)
+                .set_eq_by(&other.disruption_ids, |x, y| x.eq_with(y, &arenas.uuid))
     }
 }
 
 impl ImpactedObject {
-    pub fn from(interners: &Interners, source: source::ImpactedObject) -> Self {
+    pub fn from(arenas: &Arenas, source: source::ImpactedObject) -> Self {
         let disruption_ids = InternedSet::new(
             source
                 .disruption_ids
                 .into_iter()
-                .map(|x| Interned::from(&interners.uuid, x)),
+                .map(|x| Interned::from(&arenas.uuid, x)),
         );
         Self {
             object: Interned::from(
-                &interners.object,
+                &arenas.object,
                 Object {
-                    typ: Interned::from(&interners.string, source.typ),
-                    id: Interned::from(&interners.string, source.id),
-                    name: Interned::from(&interners.string, source.name),
+                    typ: Interned::from(&arenas.string, source.typ),
+                    id: Interned::from(&arenas.string, source.id),
+                    name: Interned::from(&arenas.string, source.name),
                 },
             ),
-            disruption_ids: Interned::from(&interners.uuid_set, disruption_ids),
+            disruption_ids: Interned::from(&arenas.uuid_set, disruption_ids),
         }
     }
 }
@@ -561,10 +556,10 @@ pub struct Object {
     pub name: IString,
 }
 
-impl EqWith<source::ImpactedObject, Interners> for Object {
-    fn eq_with(&self, other: &source::ImpactedObject, interners: &Interners) -> bool {
-        self.typ.eq_with(&other.typ, &interners.string)
-            && self.id.eq_with(&other.id, &interners.string)
-            && self.name.eq_with(&other.name, &interners.string)
+impl EqWith<source::ImpactedObject, Arenas> for Object {
+    fn eq_with(&self, other: &source::ImpactedObject, arenas: &Arenas) -> bool {
+        self.typ.eq_with(&other.typ, &arenas.string)
+            && self.id.eq_with(&other.id, &arenas.string)
+            && self.name.eq_with(&other.name, &arenas.string)
     }
 }

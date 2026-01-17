@@ -1,13 +1,12 @@
 #![feature(exit_status_error, iter_order_by)]
 
 mod compare;
-mod intern;
 mod schema;
 
 use compare::EqWith;
 use get_size2::GetSize;
 use paralight::prelude::*;
-use schema::optimized::Interners;
+use schema::optimized::Arenas;
 use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use std::fs::{read_dir, DirEntry, File};
@@ -33,7 +32,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
 
-    let interners = Interners::default();
+    let arenas = Arenas::default();
     let datas = Mutex::new(Vec::new());
 
     let thread_pool = RayonThreadPool::new_global(
@@ -63,11 +62,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             };
             total_parsed_bytes.fetch_add(data.get_size(), Ordering::Relaxed);
 
-            let optimized = schema::optimized::Data::from(&interners, data.clone());
+            let optimized = schema::optimized::Data::from(&arenas, data.clone());
             total_optimized_bytes.fetch_add(optimized.get_size(), Ordering::Relaxed);
 
             assert!(
-                optimized.eq_with(&data, &interners),
+                optimized.eq_with(&data, &arenas),
                 "Optimized data didn't match original for file: {file_path:?}"
             );
 
@@ -91,19 +90,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         total_parsed_bytes as f64 * 100.0 / total_input_bytes as f64,
     );
 
-    let interners_bytes = interners.get_size();
-    total_optimized_bytes += interners_bytes;
+    let arenas_bytes = arenas.get_size();
+    total_optimized_bytes += arenas_bytes;
     println!(
         "Optimized to {total_optimized_bytes} bytes (relative size = {:.02}%)",
         total_optimized_bytes as f64 * 100.0 / total_input_bytes as f64,
     );
     println!(
-        "[{:.02}%] Interners: {interners_bytes} bytes",
-        interners_bytes as f64 * 100.0 / total_optimized_bytes as f64,
+        "[{:.02}%] Arenas: {arenas_bytes} bytes",
+        arenas_bytes as f64 * 100.0 / total_optimized_bytes as f64,
     );
-    interners.print_summary(total_optimized_bytes);
+    arenas.print_summary(total_optimized_bytes);
 
-    let database = Database { interners, datas };
+    let database = Database { arenas, datas };
     eprintln!("Serializing database into directory: {output_dir:?}");
 
     let bincode_bytes = serde_round_trip(
@@ -207,7 +206,7 @@ fn visit_dirs(
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct Database {
-    interners: Interners,
+    arenas: Arenas,
     datas: Vec<schema::optimized::Data>,
 }
 
