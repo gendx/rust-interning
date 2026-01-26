@@ -5,6 +5,7 @@ mod schema;
 
 use compare::EqWith;
 use get_size2::GetSize;
+use jinterner::{IValue, Jinterners};
 use paralight::prelude::*;
 use schema::optimized::Arenas;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_input_bytes = AtomicUsize::new(0);
     let total_parsed_bytes = AtomicUsize::new(0);
     let total_optimized_bytes = AtomicUsize::new(0);
+    let total_optimized_json_bytes = AtomicUsize::new(0);
 
     let mut args = std::env::args();
     if args.len() <= 2 {
@@ -34,6 +36,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let arenas = Arenas::default();
     let datas = Mutex::new(Vec::new());
+
+    let jinterners = Jinterners::default();
+    let jvalues = Mutex::new(Vec::new());
 
     let thread_pool = RayonThreadPool::new_global(
         ThreadCount::try_from(rayon_core::current_num_threads())
@@ -47,11 +52,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("Visiting directory: {directory:?}");
         visit_dirs(&thread_pool, &directory, &|file_path| {
             let mut file = File::open(file_path)?;
-            let mut data = Vec::new();
-            file.read_to_end(&mut data)?;
-            total_input_bytes.fetch_add(data.len(), Ordering::Relaxed);
+            let mut bytes = Vec::new();
+            file.read_to_end(&mut bytes)?;
+            total_input_bytes.fetch_add(bytes.len(), Ordering::Relaxed);
 
-            let data: Result<schema::source::Data, _> = serde_json::from_slice(&data);
+            let data: Result<schema::source::Data, _> = serde_json::from_slice(&bytes);
             let data = match data {
                 Ok(data) => data,
                 Err(err) => {
@@ -71,8 +76,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             );
 
             datas.lock().unwrap().push(optimized);
-
             file_count.fetch_add(1, Ordering::Relaxed);
+
+            let value: Result<serde_json::Value, _> = serde_json::from_slice(&bytes);
+            let value = match value {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("Error parsing JSON in file: {file_path:?}\n\t{err:?}");
+                    return Ok(());
+                }
+            };
+
+            let jvalue = IValue::from_ref(&jinterners, &value);
+            total_optimized_json_bytes.fetch_add(jvalue.get_size(), Ordering::Relaxed);
+
+            assert_eq!(
+                jvalue.lookup(&jinterners),
+                value,
+                "Optimized JSON data didn't match original for file: {file_path:?}"
+            );
+
+            jvalues.lock().unwrap().push(jvalue);
+
             Ok(())
         })?;
     }
@@ -82,7 +107,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_input_bytes = total_input_bytes.load(Ordering::Relaxed);
     let total_parsed_bytes = total_parsed_bytes.load(Ordering::Relaxed);
     let mut total_optimized_bytes = total_optimized_bytes.load(Ordering::Relaxed);
+    let mut total_optimized_json_bytes = total_optimized_json_bytes.load(Ordering::Relaxed);
     let datas = datas.into_inner().unwrap();
+    let jvalues = jvalues.into_inner().unwrap();
 
     println!("Parsed {total_input_bytes} bytes from {file_count} files (+ {file_error_count} failed files)");
     println!(
@@ -103,17 +130,53 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     arenas.print_summary(total_optimized_bytes);
 
     let database = Database { arenas, datas };
+    codec(&database, output_dir.clone(), total_input_bytes)?;
+
+    let jinterners_bytes = jinterners.get_size();
+    total_optimized_json_bytes += jinterners_bytes;
+    println!(
+        "Optimized to {total_optimized_json_bytes} bytes (relative size = {:.02}%)",
+        total_optimized_json_bytes as f64 * 100.0 / total_input_bytes as f64,
+    );
+    println!(
+        "[{:.02}%] Jinterners: {jinterners_bytes} bytes",
+        jinterners_bytes as f64 * 100.0 / total_optimized_json_bytes as f64,
+    );
+    jinterners.print_summary_strings("  ", "String", total_optimized_json_bytes);
+    jinterners.print_summary_arrays("  ", "Array", total_optimized_json_bytes);
+    jinterners.print_summary_objects("  ", "Object", total_optimized_json_bytes);
+
+    let jdatabase = Jdatabase {
+        jinterners,
+        jvalues,
+    };
+    jcodec(&jdatabase, output_dir, total_input_bytes)?;
+
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Database {
+    arenas: Arenas,
+    datas: Vec<schema::optimized::Data>,
+}
+
+fn codec(
+    database: &Database,
+    output_dir: PathBuf,
+    total_input_bytes: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Serializing database into directory: {output_dir:?}");
 
     let bincode_bytes = serde_round_trip(
-        &database,
+        database,
         output_dir.join("bincode.db"),
         |value| Ok(bincode::serialize(value)?),
         |bytes| Ok(bincode::deserialize(bytes)?),
     )?;
 
     let cbor_bytes = serde_round_trip(
-        &database,
+        database,
         output_dir.join("cbor.db"),
         |value| {
             let mut output = Vec::new();
@@ -124,43 +187,107 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let json_bytes = serde_round_trip(
-        &database,
+        database,
         output_dir.join("json.db"),
         |value| Ok(serde_json::to_vec(value)?),
         |bytes| Ok(serde_json::from_slice(bytes)?),
     )?;
 
     let json_pretty_bytes = serde_round_trip(
-        &database,
+        database,
         output_dir.join("json_pretty.db"),
         |value| Ok(serde_json::to_vec_pretty(value)?),
         |bytes| Ok(serde_json::from_slice(bytes)?),
     )?;
 
     let postcard_bytes = serde_round_trip(
-        &database,
+        database,
         output_dir.join("postcard.db"),
         |value| Ok(postcard::to_stdvec(value)?),
         |bytes| Ok(postcard::from_bytes(bytes)?),
     )?;
 
-    println!("+---------------+-------------------+-------------------+-------------------+-------------------+");
-    println!("|    Format     |       Bytes       |      gzip -6      |       xz -6       |     brotli -6     |");
-    println!("+---------------+-----------+-------+-----------+-------+-----------+-------+-----------+-------+");
+    println!("+---------------+-------------------+-------------------+-------------------+-------------------+-------------------+");
+    println!("|    Format     |       Bytes       |      gzip -6      |       xz -6       |     brotli -6     |     zstd -12      |");
+    println!("+---------------+-----------+-------+-----------+-------+-----------+-------+-----------+-------+-----------+-------+");
     bincode_bytes.print_sizes("Bincode", total_input_bytes);
     cbor_bytes.print_sizes("CBOR", total_input_bytes);
     json_bytes.print_sizes("JSON", total_input_bytes);
     json_pretty_bytes.print_sizes("JSON (pretty)", total_input_bytes);
     postcard_bytes.print_sizes("Postcard", total_input_bytes);
-    println!("+---------------+---------+-+-------+---------+-+-------+---------+-+-------+---------+-+-------+");
-    println!("|               |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |");
-    println!("+---------------+---------+---------+---------+---------+---------+---------+---------+---------+");
+    println!("+---------------+---------+-+-------+---------+-+-------+---------+-+-------+---------+-+-------+---------+-+-------+");
+    println!("|               |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |");
+    println!("+---------------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+");
     bincode_bytes.print_times("Bincode");
     cbor_bytes.print_times("CBOR");
     json_bytes.print_times("JSON");
     json_pretty_bytes.print_times("JSON (pretty)");
     postcard_bytes.print_times("Postcard");
-    println!("+---------------+---------+---------+---------+---------+---------+---------+---------+---------+");
+    println!("+---------------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+");
+
+    Ok(())
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+struct Jdatabase {
+    jinterners: Jinterners,
+    jvalues: Vec<IValue>,
+}
+
+fn jcodec(
+    database: &Jdatabase,
+    output_dir: PathBuf,
+    total_input_bytes: usize,
+) -> Result<(), Box<dyn std::error::Error>> {
+    eprintln!("Serializing database into directory: {output_dir:?}");
+
+    let bincode_bytes = serde_round_trip(
+        database,
+        output_dir.join("bincode.jdb"),
+        |value| Ok(bincode::serialize(value)?),
+        |bytes| Ok(bincode::deserialize(bytes)?),
+    )?;
+
+    let cbor_bytes = serde_round_trip(
+        database,
+        output_dir.join("cbor.jdb"),
+        |value| {
+            let mut output = Vec::new();
+            ciborium::into_writer(value, &mut output)?;
+            Ok(output)
+        },
+        |bytes| Ok(ciborium::from_reader(bytes)?),
+    )?;
+
+    let json_bytes = serde_round_trip(
+        database,
+        output_dir.join("json.jdb"),
+        |value| Ok(serde_json::to_vec(value)?),
+        |bytes| Ok(serde_json::from_slice(bytes)?),
+    )?;
+
+    let postcard_bytes = serde_round_trip(
+        database,
+        output_dir.join("postcard.jdb"),
+        |value| Ok(postcard::to_stdvec(value)?),
+        |bytes| Ok(postcard::from_bytes(bytes)?),
+    )?;
+
+    println!("+---------------+-------------------+-------------------+-------------------+-------------------+-------------------+");
+    println!("|    Format     |       Bytes       |      gzip -6      |       xz -6       |     brotli -6     |     zstd -12      |");
+    println!("+---------------+-----------+-------+-----------+-------+-----------+-------+-----------+-------+-----------+-------+");
+    bincode_bytes.print_sizes("Bincode", total_input_bytes);
+    cbor_bytes.print_sizes("CBOR", total_input_bytes);
+    json_bytes.print_sizes("JSON", total_input_bytes);
+    postcard_bytes.print_sizes("Postcard", total_input_bytes);
+    println!("+---------------+---------+-+-------+---------+-+-------+---------+-+-------+---------+-+-------+---------+-+-------+");
+    println!("|               |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |   enc   |   dec   |");
+    println!("+---------------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+");
+    bincode_bytes.print_times("Bincode");
+    cbor_bytes.print_times("CBOR");
+    json_bytes.print_times("JSON");
+    postcard_bytes.print_times("Postcard");
+    println!("+---------------+---------+---------+---------+---------+---------+---------+---------+---------+---------+---------+");
 
     Ok(())
 }
@@ -204,17 +331,12 @@ fn visit_dirs(
     Ok(())
 }
 
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
-struct Database {
-    arenas: Arenas,
-    datas: Vec<schema::optimized::Data>,
-}
-
 struct Stats {
     serialized: CodecStats,
     gzip: CodecStats,
     xz: CodecStats,
     brotli: CodecStats,
+    zstd: CodecStats,
 }
 
 struct CodecStats {
@@ -226,7 +348,7 @@ struct CodecStats {
 impl Stats {
     fn print_sizes(&self, title: &str, total_bytes: usize) {
         println!(
-            "| {title:<13} | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% |",
+            "| {title:<13} | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% |",
             self.serialized.encoded_size,
             self.serialized.encoded_size as f64 * 100.0 / total_bytes as f64,
             self.gzip.encoded_size,
@@ -235,12 +357,14 @@ impl Stats {
             self.xz.encoded_size as f64 * 100.0 / total_bytes as f64,
             self.brotli.encoded_size,
             self.brotli.encoded_size as f64 * 100.0 / total_bytes as f64,
+            self.zstd.encoded_size,
+            self.zstd.encoded_size as f64 * 100.0 / total_bytes as f64,
         );
     }
 
     fn print_times(&self, title: &str) {
         println!(
-            "| {title:<13} |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |",
+            "| {title:<13} |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |{:>5} ms |",
             self.serialized.encode_time.as_millis(),
             self.serialized.decode_time.as_millis(),
             self.gzip.encode_time.as_millis(),
@@ -249,6 +373,8 @@ impl Stats {
             self.xz.decode_time.as_millis(),
             self.brotli.encode_time.as_millis(),
             self.brotli.decode_time.as_millis(),
+            self.zstd.encode_time.as_millis(),
+            self.zstd.decode_time.as_millis(),
         );
     }
 }
@@ -296,6 +422,7 @@ fn serde_round_trip<T: PartialEq + Debug>(
         gzip: gzip_round_trip(&serialized)?,
         xz: xz_round_trip(&serialized)?,
         brotli: brotli_round_trip(&serialized)?,
+        zstd: zstd_round_trip(&serialized)?,
     })
 }
 
@@ -344,6 +471,23 @@ fn brotli_round_trip(bytes: &[u8]) -> Result<CodecStats, Box<dyn std::error::Err
         },
         || {
             let mut command = Command::new("brotli");
+            command.arg("-c").arg("-d");
+            command
+        },
+    )
+}
+
+fn zstd_round_trip(bytes: &[u8]) -> Result<CodecStats, Box<dyn std::error::Error>> {
+    codec_round_trip(
+        "zstd",
+        bytes,
+        || {
+            let mut command = Command::new("zstd");
+            command.arg("-c").arg("-12");
+            command
+        },
+        || {
+            let mut command = Command::new("zstd");
             command.arg("-c").arg("-d");
             command
         },
