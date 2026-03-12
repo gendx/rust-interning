@@ -1,14 +1,15 @@
-#![feature(exit_status_error, iter_order_by)]
+#![feature(exit_status_error)]
 
 mod compare;
 mod schema;
 
 use compare::EqWith;
 use get_size2::GetSize;
-use jinterner::{IValue, Jinterners};
+use jinterner::{IValue, Jinterners, ValueRef};
 use paralight::prelude::*;
 use schema::optimized::Arenas;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::fs::{read_dir, DirEntry, File};
 use std::io::{Read, Write};
@@ -150,9 +151,168 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         jinterners,
         jvalues,
     };
+    jcodec(&jdatabase, output_dir.clone(), total_input_bytes)?;
+
+    println!("Optimizing interners...");
+    let opt = joptimize(&jdatabase.jinterners, &jdatabase.jvalues);
+
+    println!("Optimizing interners (manual loop)...");
+    let (jinterners, jvalues) = joptimize_loop(jdatabase.jinterners, jdatabase.jvalues);
+
+    if let Some((jinterners_opt, jvalues_opt)) = opt {
+        assert_eq!(jinterners, jinterners_opt);
+        assert_eq!(jvalues, jvalues_opt);
+    }
+
+    let jdatabase = Jdatabase {
+        jinterners,
+        jvalues,
+    };
     jcodec(&jdatabase, output_dir, total_input_bytes)?;
 
     Ok(())
+}
+
+fn check_eq(
+    jvalue1: &IValue,
+    jinterners1: &Jinterners,
+    jvalue2: &IValue,
+    jinterners2: &Jinterners,
+) -> bool {
+    match (
+        jvalue1.lookup_ref(jinterners1),
+        jvalue2.lookup_ref(jinterners2),
+    ) {
+        (ValueRef::Null, ValueRef::Null) => true,
+        (ValueRef::Bool(x), ValueRef::Bool(y)) => x == y,
+        (ValueRef::U64(x), ValueRef::U64(y)) => x == y,
+        (ValueRef::I64(x), ValueRef::I64(y)) => x == y,
+        (ValueRef::F64(x), ValueRef::F64(y)) => x == y,
+        (ValueRef::String(x), ValueRef::String(y)) => x == y,
+        (ValueRef::Array(x), ValueRef::Array(y)) => {
+            x.len() == y.len()
+                && x.iter()
+                    .zip(y.iter())
+                    .all(|(a, b)| check_eq(a, jinterners1, b, jinterners2))
+        }
+        (ValueRef::Object(x), ValueRef::Object(y)) => {
+            let mut x = x.iter();
+            let y = y.iter();
+            if x.len() != y.len() {
+                false
+            } else {
+                let y: HashMap<_, _> = y.collect();
+                x.all(|(k, a)| {
+                    y.get(k)
+                        .is_some_and(|b| check_eq(a, jinterners1, b, jinterners2))
+                })
+            }
+        }
+        _ => false,
+    }
+}
+
+fn joptimize_loop(jinterners: Jinterners, jvalues: Vec<IValue>) -> (Jinterners, Vec<IValue>) {
+    let start = Instant::now();
+    let mut optimized = None;
+    for _ in 0..10 {
+        let (jinterners, jvalues) = match optimized {
+            None => (&jinterners, &jvalues),
+            Some((ref jinterners, ref jvalues)) => (jinterners, jvalues),
+        };
+        match joptimize_once(jinterners, jvalues) {
+            Some(opt) => optimized = Some(opt),
+            None => break,
+        }
+    }
+    let (jinterners_opt, mut jvalues_opt) = optimized.unwrap();
+    let opt_time = Instant::now().duration_since(start);
+    eprintln!("Optimization time: {:?}", opt_time);
+
+    eprint!("Checking equality...");
+    let start = Instant::now();
+    for (jvalue, jvalue_opt) in jvalues.iter().zip(jvalues_opt.iter()) {
+        assert!(check_eq(jvalue, &jinterners, jvalue_opt, &jinterners_opt));
+    }
+    let check_time = Instant::now().duration_since(start);
+    eprintln!(" {:?}", check_time);
+
+    jvalues_opt.sort_unstable();
+    (jinterners_opt, jvalues_opt)
+}
+
+fn joptimize(jinterners: &Jinterners, jvalues: &[IValue]) -> Option<(Jinterners, Vec<IValue>)> {
+    eprint!("Calculating mapping...");
+    let start = Instant::now();
+    let opt = jinterners.optimize(None);
+    let optimize_time = Instant::now().duration_since(start);
+
+    let (jinterners_opt, mapping) = match opt {
+        None => {
+            eprintln!(" {:?} | identity", optimize_time,);
+            return None;
+        }
+        Some(opt) => opt,
+    };
+
+    eprintln!(
+        " {:?} | remapping {} strings, {} arrays, {} objects",
+        optimize_time,
+        mapping.count_remapped_strings(),
+        mapping.count_remapped_arrays(),
+        mapping.count_remapped_objects()
+    );
+
+    eprint!("Mapping values...");
+    let start = Instant::now();
+    let mut jvalues_opt: Vec<_> = jvalues.iter().map(|v| mapping.map(*v)).collect();
+    let map_time = Instant::now().duration_since(start);
+    eprintln!(" {:?}", map_time);
+
+    eprint!("Checking equality...");
+    let start = Instant::now();
+    for (jvalue, jvalue_opt) in jvalues.iter().zip(jvalues_opt.iter()) {
+        assert!(check_eq(jvalue, jinterners, jvalue_opt, &jinterners_opt));
+    }
+    let check_time = Instant::now().duration_since(start);
+    eprintln!(" {:?}", check_time);
+
+    jvalues_opt.sort_unstable();
+    Some((jinterners_opt, jvalues_opt))
+}
+
+fn joptimize_once(
+    jinterners: &Jinterners,
+    jvalues: &[IValue],
+) -> Option<(Jinterners, Vec<IValue>)> {
+    eprint!("Calculating mapping...");
+    let start = Instant::now();
+    let opt = jinterners.optimize_once();
+    let optimize_time = Instant::now().duration_since(start);
+
+    let (jinterners_opt, mapping) = match opt {
+        None => {
+            eprintln!(" {:?} | identity", optimize_time,);
+            return None;
+        }
+        Some(opt) => opt,
+    };
+
+    eprintln!(
+        " {:?} | remapping {} strings, {} arrays, {} objects",
+        optimize_time,
+        mapping.count_remapped_strings(),
+        mapping.count_remapped_arrays(),
+        mapping.count_remapped_objects()
+    );
+
+    eprint!("Mapping values...");
+    let start = Instant::now();
+    let jvalues_opt: Vec<_> = jvalues.iter().map(|v| mapping.map(*v)).collect();
+    let map_time = Instant::now().duration_since(start);
+    eprintln!(" {:?}", map_time);
+
+    Some((jinterners_opt, jvalues_opt))
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -348,7 +508,7 @@ struct CodecStats {
 impl Stats {
     fn print_sizes(&self, title: &str, total_bytes: usize) {
         println!(
-            "| {title:<13} | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% | {:>9} | {:.02}% |",
+            "| {title:<13} | {:>9} |{:>5.02}% | {:>9} |{:>5.02}% | {:>9} |{:>5.02}% | {:>9} |{:>5.02}% | {:>9} |{:>5.02}% |",
             self.serialized.encoded_size,
             self.serialized.encoded_size as f64 * 100.0 / total_bytes as f64,
             self.gzip.encoded_size,
