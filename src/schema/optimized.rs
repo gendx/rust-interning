@@ -271,15 +271,15 @@ impl Data {
             } => {
                 let disruptions = InternedSet::new(disruptions.into_iter().map(|x| {
                     let disruption = Disruption::from(arenas, x);
-                    Interned::from(&arenas.disruption, disruption)
+                    arenas.disruption.intern(disruption)
                 }));
                 let lines = InternedSet::new(lines.into_iter().map(|x| {
                     let line = Line::from(arenas, x);
-                    Interned::from(&arenas.line, line)
+                    arenas.line.intern(line)
                 }));
                 Data::Success(DataSuccess {
-                    disruptions: Interned::from(&arenas.disruption_set, disruptions),
-                    lines: Interned::from(&arenas.line_set, lines),
+                    disruptions: arenas.disruption_set.intern(disruptions),
+                    lines: arenas.line_set.intern(lines),
                     last_updated_date: TimestampMillis::from_rfc3339(&last_updated_date),
                 })
             }
@@ -292,8 +292,8 @@ impl Data {
                 message: Some(message),
             } => Data::Error(DataError {
                 status_code,
-                error: Interned::from(&arenas.string, error),
-                message: Interned::from(&arenas.string, message),
+                error: arenas.string.intern(error),
+                message: arenas.string.intern(message),
             }),
             _ => panic!("Invalid data: {source:?}"),
         }
@@ -310,15 +310,17 @@ pub struct DataSuccess {
 impl EqWith<source::Data, Arenas> for DataSuccess {
     fn eq_with(&self, other: &source::Data, arenas: &Arenas) -> bool {
         other.disruptions.as_ref().is_some_and(|other| {
-            self.disruptions
-                .lookup_ref(&arenas.disruption_set)
+            arenas
+                .disruption_set
+                .lookup_ref(self.disruptions)
                 .set_eq_by(other, |x, y| {
-                    x.lookup_ref(&arenas.disruption).eq_with(y, arenas)
+                    arenas.disruption.lookup_ref(*x).eq_with(y, arenas)
                 })
         }) && other.lines.as_ref().is_some_and(|other| {
-            self.lines
-                .lookup_ref(&arenas.line_set)
-                .set_eq_by(other, |x, y| x.lookup_ref(&arenas.line).eq_with(y, arenas))
+            arenas
+                .line_set
+                .lookup_ref(self.lines)
+                .set_eq_by(other, |x, y| arenas.line.lookup_ref(*x).eq_with(y, arenas))
         }) && other
             .last_updated_date
             .as_ref()
@@ -376,7 +378,7 @@ impl EqWith<source::Disruption, Arenas> for Disruption {
             && self
                 .application_periods
                 .set_eq_by(&other.application_periods, |x, y| {
-                    x.lookup_ref(&arenas.application_period).eq_with(y, arenas)
+                    arenas.application_period.lookup_ref(*x).eq_with(y, arenas)
                 })
             && self.last_update.to_formatted("%Y%m%dT%H%M%S") == other.last_update
             && self.cause.eq_with(&other.cause, &arenas.string)
@@ -400,30 +402,26 @@ impl EqWith<source::Disruption, Arenas> for Disruption {
 impl Disruption {
     pub fn from(arenas: &Arenas, source: source::Disruption) -> Self {
         Self {
-            id: Interned::from(&arenas.uuid, source.id),
+            id: arenas.uuid.intern(source.id),
             application_periods: InternedSet::new(source.application_periods.into_iter().map(
                 |x| {
                     let application_period = ApplicationPeriod::from(arenas, x);
-                    Interned::from(&arenas.application_period, application_period)
+                    arenas.application_period.intern(application_period)
                 },
             )),
             last_update: TimestampSecondsParis::from_formatted(
                 &source.last_update,
                 "%Y%m%dT%H%M%S",
             ),
-            cause: Interned::from(&arenas.string, source.cause),
-            severity: Interned::from(&arenas.string, source.severity),
-            tags: source.tags.map(|x| {
-                InternedSet::new(x.into_iter().map(|x| Interned::from(&arenas.string, x)))
-            }),
-            title: Interned::from(&arenas.string, source.title),
-            message: source.message.map(|x| Interned::from(&arenas.string, x)),
-            short_message: source
-                .short_message
-                .map(|x| Interned::from(&arenas.string, x)),
-            disruption_id: source
-                .disruption_id
-                .map(|x| Interned::from(&arenas.uuid, x)),
+            cause: arenas.string.intern(source.cause),
+            severity: arenas.string.intern(source.severity),
+            tags: source
+                .tags
+                .map(|x| InternedSet::new(x.into_iter().map(|x| arenas.string.intern(x)))),
+            title: arenas.string.intern(source.title),
+            message: source.message.map(|x| arenas.string.intern(x)),
+            short_message: source.short_message.map(|x| arenas.string.intern(x)),
+            disruption_id: source.disruption_id.map(|x| arenas.uuid.intern(x)),
         }
     }
 }
@@ -458,13 +456,14 @@ pub struct Line {
 
 impl EqWith<source::Line, Arenas> for Line {
     fn eq_with(&self, other: &source::Line, arenas: &Arenas) -> bool {
-        self.header
-            .lookup_ref(&arenas.line_header)
+        arenas
+            .line_header
+            .lookup_ref(self.header)
             .eq_with(other, arenas)
             && self
                 .impacted_objects
                 .set_eq_by(&other.impacted_objects, |x, y| {
-                    x.lookup_ref(&arenas.impacted_object).eq_with(y, arenas)
+                    arenas.impacted_object.lookup_ref(*x).eq_with(y, arenas)
                 })
     }
 }
@@ -472,19 +471,16 @@ impl EqWith<source::Line, Arenas> for Line {
 impl Line {
     pub fn from(arenas: &Arenas, source: source::Line) -> Self {
         Self {
-            header: Interned::from(
-                &arenas.line_header,
-                LineHeader {
-                    id: Interned::from(&arenas.string, source.id),
-                    name: Interned::from(&arenas.string, source.name),
-                    short_name: Interned::from(&arenas.string, source.short_name),
-                    mode: Interned::from(&arenas.string, source.mode),
-                    network_id: Interned::from(&arenas.string, source.network_id),
-                },
-            ),
+            header: arenas.line_header.intern(LineHeader {
+                id: arenas.string.intern(source.id),
+                name: arenas.string.intern(source.name),
+                short_name: arenas.string.intern(source.short_name),
+                mode: arenas.string.intern(source.mode),
+                network_id: arenas.string.intern(source.network_id),
+            }),
             impacted_objects: InternedSet::new(source.impacted_objects.into_iter().map(|x| {
                 let impacted_object = ImpactedObject::from(arenas, x);
-                Interned::from(&arenas.impacted_object, impacted_object)
+                arenas.impacted_object.intern(impacted_object)
             })),
         }
     }
@@ -517,12 +513,10 @@ pub struct ImpactedObject {
 
 impl EqWith<source::ImpactedObject, Arenas> for ImpactedObject {
     fn eq_with(&self, other: &source::ImpactedObject, arenas: &Arenas) -> bool {
-        self.object
-            .lookup_ref(&arenas.object)
-            .eq_with(other, arenas)
-            && self
-                .disruption_ids
-                .lookup_ref(&arenas.uuid_set)
+        arenas.object.lookup_ref(self.object).eq_with(other, arenas)
+            && arenas
+                .uuid_set
+                .lookup_ref(self.disruption_ids)
                 .set_eq_by(&other.disruption_ids, |x, y| x.eq_with(y, &arenas.uuid))
     }
 }
@@ -533,18 +527,15 @@ impl ImpactedObject {
             source
                 .disruption_ids
                 .into_iter()
-                .map(|x| Interned::from(&arenas.uuid, x)),
+                .map(|x| arenas.uuid.intern(x)),
         );
         Self {
-            object: Interned::from(
-                &arenas.object,
-                Object {
-                    typ: Interned::from(&arenas.string, source.typ),
-                    id: Interned::from(&arenas.string, source.id),
-                    name: Interned::from(&arenas.string, source.name),
-                },
-            ),
-            disruption_ids: Interned::from(&arenas.uuid_set, disruption_ids),
+            object: arenas.object.intern(Object {
+                typ: arenas.string.intern(source.typ),
+                id: arenas.string.intern(source.id),
+                name: arenas.string.intern(source.name),
+            }),
+            disruption_ids: arenas.uuid_set.intern(disruption_ids),
         }
     }
 }

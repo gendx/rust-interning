@@ -88,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             };
 
-            let jvalue = IValue::from_ref(&jinterners, &value);
+            let jvalue = jinterners.intern_ref(&value);
             total_optimized_json_bytes.fetch_add(jvalue.get_size(), Ordering::Relaxed);
 
             assert_eq!(

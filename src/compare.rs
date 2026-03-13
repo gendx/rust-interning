@@ -12,6 +12,6 @@ where
     Storage: Borrow<T>,
 {
     fn eq_with(&self, other: &T, arena: &Arena<T, Storage>) -> bool {
-        self.lookup_ref(arena) == other
+        arena.lookup_ref(*self) == other
     }
 }
