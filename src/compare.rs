@@ -1,4 +1,4 @@
-use blazinterner::{Arena, Interned};
+use blazinterner::{Arena, ArenaStr, Interned, InternedStr};
 use std::borrow::Borrow;
 use std::hash::Hash;
 
@@ -13,5 +13,11 @@ where
 {
     fn eq_with(&self, other: &T, arena: &Arena<T, Storage>) -> bool {
         arena.lookup_ref(*self) == other
+    }
+}
+
+impl EqWith<str, ArenaStr> for InternedStr {
+    fn eq_with(&self, other: &str, arena: &ArenaStr) -> bool {
+        arena.lookup(*self) == other
     }
 }

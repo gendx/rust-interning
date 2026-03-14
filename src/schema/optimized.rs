@@ -1,7 +1,7 @@
 use super::source;
 use super::Uuid;
 use crate::compare::EqWith;
-use blazinterner::{Arena, Interned};
+use blazinterner::{Arena, ArenaStr, Interned, InternedStr};
 use chrono::format::SecondsFormat;
 use chrono::offset::LocalResult;
 use chrono::{DateTime, NaiveDateTime};
@@ -13,12 +13,9 @@ use serde_tuple::{Deserialize_tuple, Serialize_tuple};
 use std::hash::Hash;
 use std::marker::PhantomData;
 
-type StringArena = Arena<str, Box<str>>;
-type IString = Interned<str, Box<str>>;
-
 #[derive(Default, Debug, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct Arenas {
-    string: StringArena,
+    string: ArenaStr,
     uuid: Arena<Uuid>,
     disruption_set: Arena<InternedSet<Disruption>>,
     disruption: Arena<Disruption>,
@@ -195,6 +192,106 @@ impl<'de, T: ?Sized, Storage> Visitor<'de> for InternedSetVisitor<T, Storage> {
     }
 }
 
+#[derive(Debug, Hash, PartialEq, Eq)]
+pub struct InternedStrSet {
+    set: Box<[InternedStr]>,
+}
+
+impl GetSize for InternedStrSet {
+    fn get_heap_size_with_tracker<Tr: GetSizeTracker>(&self, tracker: Tr) -> (usize, Tr) {
+        self.set.get_heap_size_with_tracker(tracker)
+    }
+}
+
+impl InternedStrSet {
+    fn new(set: impl IntoIterator<Item = InternedStr>) -> Self {
+        let mut set: Box<[_]> = set.into_iter().collect();
+        set.sort_unstable();
+        Self { set }
+    }
+
+    fn set_eq_by<U>(&self, rhs: &[U], pred: impl Fn(&InternedStr, &U) -> bool) -> bool {
+        set_eq_by(&self.set, rhs, pred)
+    }
+}
+
+impl Serialize for InternedStrSet {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut rle_encoded = Vec::with_capacity(self.set.len());
+        let mut prev: Option<u32> = None;
+        let mut streak: i32 = 0;
+
+        for x in &self.set {
+            let id = x.id();
+            let diff = id - prev.unwrap_or(0);
+            if prev.is_some() && diff == 1 {
+                streak += 1;
+            } else {
+                if streak != 0 {
+                    rle_encoded.push(-streak);
+                    streak = 0;
+                }
+                rle_encoded.push(diff as i32);
+            }
+            prev = Some(id);
+        }
+        if streak != 0 {
+            rle_encoded.push(-streak);
+        }
+
+        serializer.collect_seq(rle_encoded)
+    }
+}
+
+impl<'de> Deserialize<'de> for InternedStrSet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        deserializer.deserialize_seq(InternedStrSetVisitor)
+    }
+}
+
+struct InternedStrSetVisitor;
+
+impl<'de> Visitor<'de> for InternedStrSetVisitor {
+    type Value = InternedStrSet;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a sequence of values")
+    }
+
+    fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+    where
+        A: SeqAccess<'de>,
+    {
+        let mut set = match seq.size_hint() {
+            None => Vec::new(),
+            Some(size_hint) => Vec::with_capacity(size_hint),
+        };
+
+        let mut prev = 0;
+        while let Some(x) = seq.next_element::<i32>()? {
+            if x < 0 {
+                for _ in 0..-x {
+                    prev += 1;
+                    set.push(InternedStr::from_id(prev));
+                }
+            } else {
+                prev += x as u32;
+                set.push(InternedStr::from_id(prev));
+            }
+        }
+
+        Ok(InternedStrSet {
+            set: set.into_boxed_slice(),
+        })
+    }
+}
+
 #[derive(Debug, Hash, PartialEq, Eq, Serialize, Deserialize, GetSize)]
 pub struct TimestampSecondsParis(i64);
 
@@ -292,8 +389,8 @@ impl Data {
                 message: Some(message),
             } => Data::Error(DataError {
                 status_code,
-                error: arenas.string.intern(error),
-                message: arenas.string.intern(message),
+                error: arenas.string.intern(&error),
+                message: arenas.string.intern(&message),
             }),
             _ => panic!("Invalid data: {source:?}"),
         }
@@ -334,8 +431,8 @@ impl EqWith<source::Data, Arenas> for DataSuccess {
 #[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct DataError {
     status_code: i32,
-    error: IString,
-    message: IString,
+    error: InternedStr,
+    message: InternedStr,
 }
 
 impl EqWith<source::Data, Arenas> for DataError {
@@ -363,12 +460,12 @@ pub struct Disruption {
     pub id: Interned<Uuid>,
     pub application_periods: InternedSet<ApplicationPeriod>,
     pub last_update: TimestampSecondsParis,
-    pub cause: IString,
-    pub severity: IString,
-    pub tags: Option<InternedSet<str, Box<str>>>,
-    pub title: IString,
-    pub message: Option<IString>,
-    pub short_message: Option<IString>,
+    pub cause: InternedStr,
+    pub severity: InternedStr,
+    pub tags: Option<InternedStrSet>,
+    pub title: InternedStr,
+    pub message: Option<InternedStr>,
+    pub short_message: Option<InternedStr>,
     pub disruption_id: Option<Interned<Uuid>>,
 }
 
@@ -413,14 +510,14 @@ impl Disruption {
                 &source.last_update,
                 "%Y%m%dT%H%M%S",
             ),
-            cause: arenas.string.intern(source.cause),
-            severity: arenas.string.intern(source.severity),
+            cause: arenas.string.intern(&source.cause),
+            severity: arenas.string.intern(&source.severity),
             tags: source
                 .tags
-                .map(|x| InternedSet::new(x.into_iter().map(|x| arenas.string.intern(x)))),
-            title: arenas.string.intern(source.title),
-            message: source.message.map(|x| arenas.string.intern(x)),
-            short_message: source.short_message.map(|x| arenas.string.intern(x)),
+                .map(|x| InternedStrSet::new(x.into_iter().map(|x| arenas.string.intern(&x)))),
+            title: arenas.string.intern(&source.title),
+            message: source.message.map(|x| arenas.string.intern(&x)),
+            short_message: source.short_message.map(|x| arenas.string.intern(&x)),
             disruption_id: source.disruption_id.map(|x| arenas.uuid.intern(x)),
         }
     }
@@ -472,11 +569,11 @@ impl Line {
     pub fn from(arenas: &Arenas, source: source::Line) -> Self {
         Self {
             header: arenas.line_header.intern(LineHeader {
-                id: arenas.string.intern(source.id),
-                name: arenas.string.intern(source.name),
-                short_name: arenas.string.intern(source.short_name),
-                mode: arenas.string.intern(source.mode),
-                network_id: arenas.string.intern(source.network_id),
+                id: arenas.string.intern(&source.id),
+                name: arenas.string.intern(&source.name),
+                short_name: arenas.string.intern(&source.short_name),
+                mode: arenas.string.intern(&source.mode),
+                network_id: arenas.string.intern(&source.network_id),
             }),
             impacted_objects: InternedSet::new(source.impacted_objects.into_iter().map(|x| {
                 let impacted_object = ImpactedObject::from(arenas, x);
@@ -488,11 +585,11 @@ impl Line {
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct LineHeader {
-    pub id: IString,
-    pub name: IString,
-    pub short_name: IString,
-    pub mode: IString,
-    pub network_id: IString,
+    pub id: InternedStr,
+    pub name: InternedStr,
+    pub short_name: InternedStr,
+    pub mode: InternedStr,
+    pub network_id: InternedStr,
 }
 
 impl EqWith<source::Line, Arenas> for LineHeader {
@@ -531,9 +628,9 @@ impl ImpactedObject {
         );
         Self {
             object: arenas.object.intern(Object {
-                typ: arenas.string.intern(source.typ),
-                id: arenas.string.intern(source.id),
-                name: arenas.string.intern(source.name),
+                typ: arenas.string.intern(&source.typ),
+                id: arenas.string.intern(&source.id),
+                name: arenas.string.intern(&source.name),
             }),
             disruption_ids: arenas.uuid_set.intern(disruption_ids),
         }
@@ -542,9 +639,9 @@ impl ImpactedObject {
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct Object {
-    pub typ: IString,
-    pub id: IString,
-    pub name: IString,
+    pub typ: InternedStr,
+    pub id: InternedStr,
+    pub name: InternedStr,
 }
 
 impl EqWith<source::ImpactedObject, Arenas> for Object {
