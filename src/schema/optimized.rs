@@ -1,7 +1,7 @@
 use super::source;
 use super::Uuid;
 use crate::compare::EqWith;
-use blazinterner::{Arena, ArenaStr, Interned, InternedStr};
+use blazinterner::{Arena, ArenaSlice, ArenaStr, Interned, InternedSlice, InternedStr};
 use chrono::format::SecondsFormat;
 use chrono::offset::LocalResult;
 use chrono::{DateTime, NaiveDateTime};
@@ -17,15 +17,15 @@ use std::marker::PhantomData;
 pub struct Arenas {
     string: ArenaStr,
     uuid: Arena<Uuid>,
-    disruption_set: Arena<InternedSet<Disruption>>,
+    disruption_set: ArenaSet<Disruption>,
     disruption: Arena<Disruption>,
     application_period: Arena<ApplicationPeriod>,
-    line_set: Arena<InternedSet<Line>>,
+    line_set: ArenaSet<Line>,
     line: Arena<Line>,
     line_header: Arena<LineHeader>,
     impacted_object: Arena<ImpactedObject>,
     object: Arena<Object>,
-    uuid_set: Arena<InternedSet<Uuid>>,
+    uuid_set: ArenaSet<Uuid>,
 }
 
 impl Arenas {
@@ -80,6 +80,42 @@ fn set_eq_by<T, U>(lhs: &[T], rhs: &[U], pred: impl Fn(&T, &U) -> bool) -> bool 
     }
 
     true
+}
+
+#[derive(Debug, PartialEq, Eq, Serialize, Deserialize, GetSize)]
+struct ArenaSet<T: ?Sized, Storage = T>(ArenaSlice<Interned<T, Storage>>);
+
+impl<T: ?Sized, Storage> Default for ArenaSet<T, Storage> {
+    fn default() -> Self {
+        Self(ArenaSlice::default())
+    }
+}
+
+impl<T: ?Sized, Storage> ArenaSet<T, Storage> {
+    fn print_summary(&self, prefix: &str, title: &str, total_bytes: usize) {
+        self.0.print_summary(prefix, title, total_bytes);
+    }
+
+    fn lookup(&self, interned: InternedSlice<Interned<T, Storage>>) -> SortedSet<'_, T, Storage> {
+        SortedSet(self.0.lookup(interned))
+    }
+
+    fn intern(
+        &self,
+        set: impl IntoIterator<Item = Interned<T, Storage>>,
+    ) -> InternedSlice<Interned<T, Storage>> {
+        let mut set: Box<[_]> = set.into_iter().collect();
+        set.sort_unstable();
+        self.0.intern_copy(&set)
+    }
+}
+
+struct SortedSet<'a, T: ?Sized, Storage = T>(&'a [Interned<T, Storage>]);
+
+impl<'a, T: ?Sized, Storage> SortedSet<'a, T, Storage> {
+    fn set_eq_by<U>(&self, rhs: &[U], pred: impl Fn(&Interned<T, Storage>, &U) -> bool) -> bool {
+        set_eq_by(self.0, rhs, pred)
+    }
 }
 
 #[derive(Debug, Hash, PartialEq, Eq)]
@@ -366,14 +402,14 @@ impl Data {
                 error: None,
                 message: None,
             } => {
-                let disruptions = InternedSet::new(disruptions.into_iter().map(|x| {
+                let disruptions = disruptions.into_iter().map(|x| {
                     let disruption = Disruption::from(arenas, x);
                     arenas.disruption.intern(disruption)
-                }));
-                let lines = InternedSet::new(lines.into_iter().map(|x| {
+                });
+                let lines = lines.into_iter().map(|x| {
                     let line = Line::from(arenas, x);
                     arenas.line.intern(line)
-                }));
+                });
                 Data::Success(DataSuccess {
                     disruptions: arenas.disruption_set.intern(disruptions),
                     lines: arenas.line_set.intern(lines),
@@ -399,8 +435,8 @@ impl Data {
 
 #[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct DataSuccess {
-    disruptions: Interned<InternedSet<Disruption>>,
-    lines: Interned<InternedSet<Line>>,
+    disruptions: InternedSlice<Interned<Disruption>>,
+    lines: InternedSlice<Interned<Line>>,
     last_updated_date: TimestampMillis,
 }
 
@@ -409,14 +445,14 @@ impl EqWith<source::Data, Arenas> for DataSuccess {
         other.disruptions.as_ref().is_some_and(|other| {
             arenas
                 .disruption_set
-                .lookup_ref(self.disruptions)
+                .lookup(self.disruptions)
                 .set_eq_by(other, |x, y| {
                     arenas.disruption.lookup_ref(*x).eq_with(y, arenas)
                 })
         }) && other.lines.as_ref().is_some_and(|other| {
             arenas
                 .line_set
-                .lookup_ref(self.lines)
+                .lookup(self.lines)
                 .set_eq_by(other, |x, y| arenas.line.lookup_ref(*x).eq_with(y, arenas))
         }) && other
             .last_updated_date
@@ -605,7 +641,7 @@ impl EqWith<source::Line, Arenas> for LineHeader {
 #[derive(Debug, Hash, PartialEq, Eq, Serialize_tuple, Deserialize_tuple, GetSize)]
 pub struct ImpactedObject {
     pub object: Interned<Object>,
-    pub disruption_ids: Interned<InternedSet<Uuid>>,
+    pub disruption_ids: InternedSlice<Interned<Uuid>>,
 }
 
 impl EqWith<source::ImpactedObject, Arenas> for ImpactedObject {
@@ -613,19 +649,17 @@ impl EqWith<source::ImpactedObject, Arenas> for ImpactedObject {
         arenas.object.lookup_ref(self.object).eq_with(other, arenas)
             && arenas
                 .uuid_set
-                .lookup_ref(self.disruption_ids)
+                .lookup(self.disruption_ids)
                 .set_eq_by(&other.disruption_ids, |x, y| x.eq_with(y, &arenas.uuid))
     }
 }
 
 impl ImpactedObject {
     pub fn from(arenas: &Arenas, source: source::ImpactedObject) -> Self {
-        let disruption_ids = InternedSet::new(
-            source
-                .disruption_ids
-                .into_iter()
-                .map(|x| arenas.uuid.intern(x)),
-        );
+        let disruption_ids = source
+            .disruption_ids
+            .into_iter()
+            .map(|x| arenas.uuid.intern(x));
         Self {
             object: arenas.object.intern(Object {
                 typ: arenas.string.intern(&source.typ),
